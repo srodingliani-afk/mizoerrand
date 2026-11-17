@@ -1,0 +1,6 @@
+{
+  "name": "ZoRun — Mizoram Hyperlocal Mobility & Essential Services OS",
+  "description": "Bilingual (Mizo + English) server-driven PWA and hybrid partner ecosystem for Mizoram's hilly terrain errands, Check-Before-Pay marketplace, managed staffing, 24x7 rapid emergency SOS, and built-in AI Dev Studio.",
+  "requestFramePermissions": ["geolocation", "microphone", "camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
