@@ -12,6 +12,8 @@ import type {
   MarketplaceProduct,
   PartnerProfile,
   PayrollRecord,
+  StaffAttendanceLog,
+  StaffLeaveRequest,
   StaffingBooking,
   SystemPlugin,
   WorkforceMember,
@@ -19,6 +21,11 @@ import type {
 import { liveGpsCache } from './redisCache';
 
 export interface DatabaseState {
+  adminAuth?: {
+    passcodeHash: string;
+    salt: string;
+    claimedAt: string;
+  };
   remoteConfig: AppRemoteConfig;
   sandboxConfig: AppRemoteConfig | null;
   plugins: SystemPlugin[];
@@ -32,6 +39,8 @@ export interface DatabaseState {
   blacklistedCustomers: string[];
   workforce: WorkforceMember[];
   staffingBookings: StaffingBooking[];
+  staffLeaveRequests: StaffLeaveRequest[];
+  staffAttendanceLogs: StaffAttendanceLog[];
   payrollRecords: PayrollRecord[];
   sosTickets: EmergencySosTicket[];
   kycQueue: KycQueueItem[];
@@ -720,6 +729,9 @@ function createInitialState(): DatabaseState {
       outstationAvailable: true,
       liveInAvailable: true,
       replacementGuarantee: true,
+      availabilityStatus: 'active',
+      bankAccountMasked: 'SBI •••• 4821',
+      verifiedBadge: 'Company Certified',
       avatarUrl: '/src/assets/images/staffing_caregiver_portrait_1794891321006.jpg',
       portfolioUrls: ['/src/assets/images/staffing_caregiver_portrait_1794891321006.jpg'],
       rating: 4.96,
@@ -740,6 +752,9 @@ function createInitialState(): DatabaseState {
       outstationAvailable: true,
       liveInAvailable: false,
       replacementGuarantee: false,
+      availabilityStatus: 'active',
+      bankAccountMasked: 'MRB •••• 2041',
+      verifiedBadge: 'Police Verified - Green Shield',
       avatarUrl: '/src/assets/images/partner_hill_rider_1794891322041.jpg',
       portfolioUrls: ['/src/assets/images/mizoram_hero_hills_1794891319409.jpg'],
       rating: 4.89,
@@ -759,9 +774,86 @@ function createInitialState(): DatabaseState {
       outstationAvailable: true,
       liveInAvailable: true,
       replacementGuarantee: true,
+      availabilityStatus: 'active',
+      bankAccountMasked: 'MRB •••• 9104',
+      verifiedBadge: 'Company Certified',
       avatarUrl: '/src/assets/images/partner_hill_rider_1794891322041.jpg',
       portfolioUrls: ['/src/assets/images/partner_hill_rider_1794891322041.jpg'],
       rating: 4.94,
+    },
+  ];
+
+  const staffingBookings: StaffingBooking[] = [
+    {
+      id: 'stf-101',
+      workerId: 'wrk-1',
+      workerName: 'Lalhmangaihi Khiangte',
+      mode: 'company_managed_staffing',
+      customerName: 'Dr. Zoramthanga Household (Khatla)',
+      isOutstationOrLiveIn: true,
+      accommodationProvided: true,
+      foodProvided: true,
+      travelCovered: true,
+      allInclusiveAmount: 14500,
+      contractId: 'CTR-MZ-261101',
+      tripartiteAgreement: true,
+      workerSosActive: false,
+      status: 'active',
+      createdAt: now,
+    },
+    {
+      id: 'stf-102',
+      workerId: 'wrk-3',
+      workerName: 'Remsangpuii Vanchhawng',
+      mode: 'company_managed_staffing',
+      customerName: 'Pu Lalmuana Family (Chaltlang)',
+      isOutstationOrLiveIn: false,
+      accommodationProvided: false,
+      foodProvided: true,
+      travelCovered: true,
+      allInclusiveAmount: 18500,
+      contractId: 'CTR-MZ-261102',
+      tripartiteAgreement: true,
+      workerSosActive: false,
+      status: 'active',
+      createdAt: now,
+    },
+  ];
+
+  const todayIso = now.slice(0, 10);
+  const staffAttendanceLogs: StaffAttendanceLog[] = [
+    {
+      id: 'att-101',
+      workerId: 'wrk-1',
+      workerName: 'Lalhmangaihi Khiangte',
+      date: todayIso,
+      checkInTime: '07:15 AM',
+      status: 'present',
+      veng: 'Khatla',
+    },
+    {
+      id: 'att-102',
+      workerId: 'wrk-3',
+      workerName: 'Remsangpuii Vanchhawng',
+      date: todayIso,
+      checkInTime: '07:45 AM',
+      status: 'present',
+      veng: 'Chaltlang',
+    },
+  ];
+
+  const staffLeaveRequests: StaffLeaveRequest[] = [
+    {
+      id: 'lvr-201',
+      workerId: 'wrk-1',
+      workerName: 'Lalhmangaihi Khiangte',
+      bookingId: 'stf-101',
+      fromDate: '2026-11-26',
+      toDate: '2026-11-27',
+      reason: 'Family church fellowship visit to Serchhip — requesting 2-day backup Awmpui.',
+      needsInstantReplacement: true,
+      status: 'pending',
+      createdAt: now,
     },
   ];
 
@@ -904,7 +996,9 @@ function createInitialState(): DatabaseState {
     prankStrikeCounts: {},
     blacklistedCustomers: [],
     workforce,
-    staffingBookings: [],
+    staffingBookings,
+    staffLeaveRequests,
+    staffAttendanceLogs,
     payrollRecords,
     sosTickets,
     kycQueue,
@@ -936,7 +1030,34 @@ class PersistentStore {
     try {
       if (fs.existsSync(DB_FILE)) {
         const raw = fs.readFileSync(DB_FILE, 'utf8');
-        return JSON.parse(raw) as DatabaseState;
+        const parsed = JSON.parse(raw) as Partial<DatabaseState>;
+        const defaults = createInitialState();
+        const merged: DatabaseState = {
+          ...defaults,
+          ...parsed,
+          staffLeaveRequests: Array.isArray(parsed.staffLeaveRequests)
+            ? parsed.staffLeaveRequests
+            : defaults.staffLeaveRequests,
+          staffAttendanceLogs: Array.isArray(parsed.staffAttendanceLogs)
+            ? parsed.staffAttendanceLogs
+            : defaults.staffAttendanceLogs,
+          staffingBookings:
+            Array.isArray(parsed.staffingBookings) && parsed.staffingBookings.length > 0
+              ? parsed.staffingBookings
+              : defaults.staffingBookings,
+          workforce: Array.isArray(parsed.workforce)
+            ? parsed.workforce.map((w) => {
+                const seedMatch = defaults.workforce.find((d) => d.id === w.id);
+                return {
+                  ...w,
+                  availabilityStatus: w.availabilityStatus || 'active',
+                  bankAccountMasked: w.bankAccountMasked || seedMatch?.bankAccountMasked,
+                  verifiedBadge: w.verifiedBadge || seedMatch?.verifiedBadge,
+                };
+              })
+            : defaults.workforce,
+        };
+        return merged;
       }
     } catch {
       // Fallback to fresh seed if corrupted

@@ -1,12 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import {
   AlertTriangle,
-  CheckCircle2,
   FileCheck2,
   Lock,
   Receipt,
   ShieldAlert,
-  Users,
 } from 'lucide-react';
 import type {
   AppRemoteConfig,
@@ -19,25 +17,35 @@ import type {
   MizoramDistrict,
   PartnerProfile,
   PayrollRecord,
+  StaffAttendanceLog,
+  StaffLeaveRequest,
   StaffingBooking,
   TrustBadge,
+  WorkforceMember,
 } from '../shared/types';
 import { TRANSLATIONS } from '../i18n/translations';
 import { ALL_MIZORAM_DISTRICT_NAMES, MIZORAM_DISTRICTS, getDistrictInfo } from '../data/mizoramDistricts';
 import { MizoramMap } from './MizoramMap';
+import { AdminStaffingConsole } from './AdminStaffingConsole';
+import { triggerHaptic } from '../lib/nativeBridge';
 
 type AdminRole = 'Super Admin' | 'Operations Lead' | 'KYC & HR Officer' | 'Finance & Payroll';
 type AdminTab = 'dispatch' | 'kyc' | 'payroll' | 'disputes';
 
 interface AdminDashboardProps {
   lang: Language;
+  adminToken: string;
+  onAuthExpired: () => void;
   selectedDistrict: MizoramDistrict;
   mapsApiKey: string;
   remoteConfig: AppRemoteConfig;
   partners: PartnerProfile[];
   errands: ErrandRequest[];
   sosTickets: EmergencySosTicket[];
+  workforce: WorkforceMember[];
   staffingBookings: StaffingBooking[];
+  leaveRequests: StaffLeaveRequest[];
+  attendanceLogs: StaffAttendanceLog[];
   payrollRecords: PayrollRecord[];
   onRefresh: () => Promise<void>;
   onOpenDevStudio: () => void;
@@ -45,13 +53,18 @@ interface AdminDashboardProps {
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   lang,
+  adminToken,
+  onAuthExpired,
   selectedDistrict,
   mapsApiKey,
   remoteConfig,
   partners,
   errands,
   sosTickets,
+  workforce,
   staffingBookings,
+  leaveRequests,
+  attendanceLogs,
   payrollRecords,
   onRefresh,
   onOpenDevStudio,
@@ -68,12 +81,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [signedCheckMsg, setSignedCheckMsg] = useState<string | null>(null);
   const [actionStatus, setActionStatus] = useState<string | null>(null);
 
+  const authHeaders = (withJson = false): Record<string, string> =>
+    withJson
+      ? { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` }
+      : { Authorization: `Bearer ${adminToken}` };
+
   const fetchAdminDetails = async () => {
     try {
       const [kycRes, escRes] = await Promise.all([
-        fetch('/api/auth-kyc/queue'),
-        fetch('/api/escrow/ledger'),
+        fetch('/api/auth-kyc/queue', { headers: authHeaders() }),
+        fetch('/api/escrow/ledger', { headers: authHeaders() }),
       ]);
+      if (kycRes.status === 401 || escRes.status === 401) {
+        onAuthExpired();
+        return;
+      }
       if (kycRes.ok) {
         const k = await kycRes.json();
         setKycQueue(k.kycQueue || []);
@@ -91,7 +113,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   useEffect(() => {
     void fetchAdminDetails();
-  }, [errands, sosTickets]);
+  }, [errands, sosTickets, adminToken]);
 
   const canAccessTab = (target: AdminTab): boolean => {
     if (role === 'Super Admin') return true;
@@ -102,63 +124,127 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   const handleToggleSundayMode = async () => {
-    await fetch('/api/sdui/quick-toggle', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sundayEmergencyMode: !remoteConfig.sundayEmergencyMode }),
-    });
-    setActionStatus(`Sunday Emergency Mode set to ${!remoteConfig.sundayEmergencyMode}`);
-    await onRefresh();
+    triggerHaptic('warning');
+    try {
+      const res = await fetch('/api/sdui/quick-toggle', {
+        method: 'POST',
+        headers: authHeaders(true),
+        body: JSON.stringify({ sundayEmergencyMode: !remoteConfig.sundayEmergencyMode }),
+      });
+      if (res.status === 401) {
+        onAuthExpired();
+        return;
+      }
+      if (!res.ok) {
+        triggerHaptic('error');
+        const err = await res.json().catch(() => ({}));
+        setActionStatus(err.error || 'Could not update Sunday Emergency Mode.');
+        return;
+      }
+      triggerHaptic('success');
+      setActionStatus(`Sunday Emergency Mode set to ${!remoteConfig.sundayEmergencyMode}`);
+      await onRefresh();
+    } catch {
+      triggerHaptic('error');
+      setActionStatus('Network error updating Sunday Emergency Mode.');
+    }
   };
 
   const handleSetRainSurge = async (mult: number) => {
-    await fetch('/api/sdui/quick-toggle', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ rainSurgeMultiplier: mult }),
-    });
-    setActionStatus(`Rain Surge updated to ${mult}x via SDUI`);
-    await onRefresh();
+    triggerHaptic('medium');
+    try {
+      const res = await fetch('/api/sdui/quick-toggle', {
+        method: 'POST',
+        headers: authHeaders(true),
+        body: JSON.stringify({ rainSurgeMultiplier: mult }),
+      });
+      if (res.status === 401) {
+        onAuthExpired();
+        return;
+      }
+      if (!res.ok) {
+        triggerHaptic('error');
+        const err = await res.json().catch(() => ({}));
+        setActionStatus(err.error || 'Could not update Rain Surge multiplier.');
+        return;
+      }
+      triggerHaptic('success');
+      setActionStatus(`Rain Surge updated to ${mult}x via SDUI`);
+      await onRefresh();
+    } catch {
+      triggerHaptic('error');
+      setActionStatus('Network error updating Rain Surge multiplier.');
+    }
   };
 
   const handleResolveSos = async (ticketId: string, status: EmergencySosTicket['status'], spareParts = 0) => {
-    await fetch(`/api/emergency/tickets/${ticketId}/update`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status, sparePartsAmount: spareParts }),
-    });
-    await onRefresh();
+    triggerHaptic(status === 'en_route' ? 'sos' : 'success');
+    try {
+      const res = await fetch(`/api/emergency/tickets/${ticketId}/update`, {
+        method: 'POST',
+        headers: authHeaders(true),
+        body: JSON.stringify({ status, sparePartsAmount: spareParts }),
+      });
+      if (res.status === 401) {
+        onAuthExpired();
+        return;
+      }
+      if (!res.ok) {
+        triggerHaptic('error');
+        const err = await res.json().catch(() => ({}));
+        setActionStatus(err.error || 'Could not update SOS ticket.');
+        return;
+      }
+      setActionStatus(`SOS ticket ${ticketId} marked ${status}.`);
+      await onRefresh();
+    } catch {
+      triggerHaptic('error');
+      setActionStatus('Network error updating SOS ticket.');
+    }
   };
 
   const handleVerifySignedUrl = async (signedUrl?: string) => {
     if (!signedUrl) return;
-    const res = await fetch(signedUrl);
-    const data = await res.json();
-    if (res.ok) {
-      setSignedCheckMsg(`Verified 60s Private URL for ${data.resourceId} (Expires ${new Date(data.expiresAt).toLocaleTimeString()})`);
-    } else {
-      setSignedCheckMsg(data.error || 'Signed URL expired');
+    try {
+      const res = await fetch(signedUrl);
+      const data = await res.json();
+      if (res.ok) {
+        setSignedCheckMsg(`Verified 60s Private URL for ${data.resourceId} (Expires ${new Date(data.expiresAt).toLocaleTimeString()})`);
+      } else {
+        setSignedCheckMsg(data.error || 'Signed URL expired');
+      }
+    } catch {
+      setSignedCheckMsg('Network error verifying signed URL.');
     }
   };
 
   const handleKycDecision = async (id: string, decision: 'approved' | 'rejected') => {
     const badge = badgeSelection[id] || 'Police Verified - Green Shield';
-    const res = await fetch('/api/auth-kyc/review', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id, decision, badge }),
-    });
-    if (res.ok) {
-      setActionStatus(`KYC ${id} marked ${decision} (${badge})`);
-      await fetchAdminDetails();
-    }
-  };
-
-  const handleDisbursePayroll = async (id: string) => {
-    const res = await fetch(`/api/staffing/payroll/${id}/disburse`, { method: 'POST' });
-    if (res.ok) {
-      setActionStatus(`Direct-to-bank salary disbursed & digital payslip issued for ${id}.`);
-      await onRefresh();
+    try {
+      const res = await fetch('/api/auth-kyc/review', {
+        method: 'POST',
+        headers: authHeaders(true),
+        body: JSON.stringify({ id, decision, badge }),
+      });
+      if (res.status === 401) {
+        onAuthExpired();
+        return;
+      }
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        setActionStatus(err.error || 'Could not save KYC review.');
+        return;
+      }
+      const data = await res.json().catch(() => ({}));
+      const publishedNote = data.promotedWorkforce
+        ? ` · Auto-published to Workforce Directory (${data.promotedWorkforce.id})`
+        : data.promotedPartner
+          ? ` · Auto-published to Fleet Partners (${data.promotedPartner.id})`
+          : '';
+      setActionStatus(`KYC ${id} marked ${decision} (${badge})${publishedNote}`);
+      await Promise.all([fetchAdminDetails(), onRefresh()]);
+    } catch {
+      setActionStatus('Network error saving KYC review.');
     }
   };
 
@@ -167,26 +253,48 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     resolution: 'resolved_refund' | 'resolved_payout' | 'blacklisted',
     blacklistCustomer = false
   ) => {
-    const res = await fetch(`/api/escrow/disputes/${id}/resolve`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ resolution, blacklistCustomer }),
-    });
-    if (res.ok) {
+    try {
+      const res = await fetch(`/api/escrow/disputes/${id}/resolve`, {
+        method: 'POST',
+        headers: authHeaders(true),
+        body: JSON.stringify({ resolution, blacklistCustomer }),
+      });
+      if (res.status === 401) {
+        onAuthExpired();
+        return;
+      }
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        setActionStatus(err.error || 'Could not resolve dispute.');
+        return;
+      }
       setActionStatus(`Dispute ${id} -> ${resolution}`);
       await fetchAdminDetails();
+    } catch {
+      setActionStatus('Network error resolving dispute.');
     }
   };
 
   const handleReconcileWebhook = async (ledgerId: string) => {
-    const res = await fetch('/api/escrow/webhooks/razorpay-reconcile', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ledgerId }),
-    });
-    if (res.ok) {
+    try {
+      const res = await fetch('/api/escrow/webhooks/razorpay-reconcile', {
+        method: 'POST',
+        headers: authHeaders(true),
+        body: JSON.stringify({ ledgerId }),
+      });
+      if (res.status === 401) {
+        onAuthExpired();
+        return;
+      }
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        setActionStatus(err.error || 'Could not reconcile webhook.');
+        return;
+      }
       setActionStatus(`Razorpay/Cashfree auto-reconciliation webhook verified for ${ledgerId}.`);
       await fetchAdminDetails();
+    } catch {
+      setActionStatus('Network error reconciling webhook.');
     }
   };
 
@@ -597,67 +705,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </div>
       )}
 
-      {/* TAB 3: MANAGED STAFFING & PAYROLL */}
+      {/* TAB 3: MANAGED STAFFING, HR DIRECTORY, CONTRACTS & PAYROLL */}
       {tab === 'payroll' && (
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <h2 className="text-base font-semibold text-slate-900 inline-flex items-center gap-2">
-                <Users className="w-4 h-4 text-teal-700" /> Managed Staffing &amp; Direct-to-Bank Payroll
-              </h2>
-              <p className="text-xs text-slate-600 mt-0.5">
-                Client billing 1st–5th · Automated direct-to-bank staff salaries &amp; digital payslips by 7th · {staffingBookings.length} New Contracts
-              </p>
-            </div>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead>
-                <tr className="border-b border-slate-200 text-slate-500">
-                  <th className="py-2 pr-4">Payslip ID</th>
-                  <th className="py-2 pr-4">Staff Member</th>
-                  <th className="py-2 pr-4">Client Household</th>
-                  <th className="py-2 pr-4">Cycle</th>
-                  <th className="py-2 pr-4 text-right">Package</th>
-                  <th className="py-2 pr-4 text-right">Net Salary</th>
-                  <th className="py-2">Bank &amp; Action</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {payrollRecords.map((rec) => (
-                  <tr key={rec.id}>
-                    <td className="py-3 pr-4 font-mono text-slate-700">{rec.payslipId}</td>
-                    <td className="py-3 pr-4 font-medium text-slate-900">{rec.staffName}</td>
-                    <td className="py-3 pr-4 text-slate-600">{rec.clientName}</td>
-                    <td className="py-3 pr-4 font-mono text-slate-600">
-                      Bill {rec.billingWindow} · Pay {rec.payoutWindow}
-                    </td>
-                    <td className="py-3 pr-4 text-right font-mono">Rs. {rec.monthlyPackage.toLocaleString()}</td>
-                    <td className="py-3 pr-4 text-right font-mono font-bold text-slate-900">
-                      Rs. {rec.netSalaryDisbursed.toLocaleString()}
-                    </td>
-                    <td className="py-3">
-                      {rec.status === 'salary_disbursed' ? (
-                        <span className="inline-flex items-center gap-1 text-teal-800 font-semibold">
-                          <CheckCircle2 className="w-3.5 h-3.5" /> Disbursed ({rec.bankAccountMasked})
-                        </span>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => handleDisbursePayroll(rec.id)}
-                          className="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800"
-                        >
-                          Disburse to {rec.bankAccountMasked}
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
+        <AdminStaffingConsole
+          lang={lang}
+          adminToken={adminToken}
+          onAuthExpired={onAuthExpired}
+          districtFilter={districtFilter}
+          workforce={workforce}
+          staffingBookings={staffingBookings}
+          leaveRequests={leaveRequests}
+          attendanceLogs={attendanceLogs}
+          payrollRecords={payrollRecords}
+          onRefresh={onRefresh}
+          onActionStatus={setActionStatus}
+        />
       )}
 
       {/* TAB 4: DISPUTES, FRAUD & 100% ESCROW GST LEDGER */}

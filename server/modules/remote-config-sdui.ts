@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { db } from '../infrastructure/store';
 import { evaluateSduiServiceVisibility } from '../domain/rules';
 import { realtimeHub } from '../infrastructure/realtimeHub';
+import { requireAdminAuth } from '../infrastructure/adminAuth';
 
 export const remoteConfigSduiRouter = Router();
 
@@ -22,7 +23,7 @@ remoteConfigSduiRouter.get('/config', (_req, res) => {
   });
 });
 
-remoteConfigSduiRouter.post('/quick-toggle', (req, res) => {
+remoteConfigSduiRouter.post('/quick-toggle', requireAdminAuth, (req, res) => {
   const { sundayEmergencyMode, rainSurgeMultiplier, trafficSurgeMultiplier } = req.body as {
     sundayEmergencyMode?: boolean;
     rainSurgeMultiplier?: number;

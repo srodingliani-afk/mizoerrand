@@ -34,6 +34,40 @@ interface MizoramMapProps {
 
 const DEFAULT_MIZORAM_CENTER = { lat: 23.7295, lng: 92.7176 };
 
+function isValidGoogleMapsKey(key: string): boolean {
+  const trimmed = (key || '').trim();
+  return (
+    trimmed.length >= 30 &&
+    trimmed.startsWith('AIza') &&
+    !/your_|placeholder|example|dummy/i.test(trimmed)
+  );
+}
+
+class MapsErrorBoundary extends React.Component<
+  { fallback: React.ReactNode; children: React.ReactNode },
+  { hasError: boolean }
+> {
+  constructor(props: { fallback: React.ReactNode; children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError(): { hasError: boolean } {
+    return { hasError: true };
+  }
+
+  componentDidCatch(): void {
+    // Gracefully switch to local Mizoram fallback without surfacing an unhandled Script error.
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return this.props.fallback;
+    }
+    return this.props.children;
+  }
+}
+
 function MapCameraController({
   district,
   districtCenter,
@@ -90,19 +124,25 @@ function RoutesPolylineLayer({
       fields: ['path', 'distanceMeters', 'durationMillis', 'viewport'],
     };
 
-    let cancelled = false;
-    (routesLib.Route as unknown as {
-      computeRoutes: (req: unknown) => Promise<{
-        routes?: Array<{
-          createPolylines: () => google.maps.Polyline[];
-          viewport?: google.maps.LatLngBounds;
+    const computeRoutesFn = (
+      routesLib?.Route as unknown as {
+        computeRoutes?: (req: unknown) => Promise<{
+          routes?: Array<{
+            createPolylines?: () => google.maps.Polyline[];
+            viewport?: google.maps.LatLngBounds;
+          }>;
         }>;
-      }>;
-    })
-      .computeRoutes(request)
+      }
+    )?.computeRoutes;
+
+    if (typeof computeRoutesFn !== 'function') return;
+
+    let cancelled = false;
+    computeRoutesFn(request)
       .then((res) => {
-        if (cancelled || !res.routes || res.routes.length === 0) return;
+        if (cancelled || !res?.routes || res.routes.length === 0) return;
         const primary = res.routes[0];
+        if (!primary || typeof primary.createPolylines !== 'function') return;
         const lines = primary.createPolylines();
         lines.forEach((line) => {
           line.setOptions({
@@ -119,7 +159,11 @@ function RoutesPolylineLayer({
       })
       .catch((err: unknown) => {
         const msg = String(err);
-        if (msg.includes('RESOURCE_EXHAUSTED') || msg.includes('429')) {
+        if (
+          msg.includes('RESOURCE_EXHAUSTED') ||
+          msg.includes('429') ||
+          msg.includes('OVER_QUERY_LIMIT')
+        ) {
           window.dispatchEvent(new CustomEvent('gmp-quota-exceeded'));
         }
       });
@@ -134,6 +178,68 @@ function RoutesPolylineLayer({
   return null;
 }
 
+function LocalVengSearchInput({
+  district = 'Aizawl',
+  placeholder,
+  onSelect,
+}: {
+  district?: MizoramDistrict;
+  placeholder: string;
+  onSelect: (place: { label: string; lat: number; lng: number }) => void;
+}) {
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<Array<{ label: string; lat: number; lng: number }>>([]);
+
+  return (
+    <div className="relative">
+      <input
+        type="text"
+        value={query}
+        onChange={(e) => {
+          const val = e.target.value;
+          setQuery(val);
+          if (!val.trim()) {
+            setResults([]);
+            return;
+          }
+          const qLower = val.toLowerCase();
+          const matched = ALL_MIZORAM_VENGS.filter(
+            (v) =>
+              v.name.toLowerCase().includes(qLower) ||
+              (v.label || '').toLowerCase().includes(qLower) ||
+              v.district.toLowerCase().includes(qLower)
+          )
+            .sort((a, b) => (a.district === district ? -1 : b.district === district ? 1 : 0))
+            .slice(0, 8)
+            .map((v) => ({ label: `${v.name} (${v.district}) · ${v.label}`, lat: v.lat, lng: v.lng }));
+          setResults(matched);
+        }}
+        placeholder={placeholder}
+        className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-teal-700 focus:outline-none"
+      />
+      {results.length > 0 && (
+        <ul className="absolute left-0 right-0 top-full z-30 mt-1 max-h-48 overflow-auto rounded-xl border border-slate-200 bg-white shadow-lg">
+          {results.map((r, i) => (
+            <li key={i}>
+              <button
+                type="button"
+                onClick={() => {
+                  onSelect({ label: r.label, lat: r.lat, lng: r.lng });
+                  setQuery(r.label);
+                  setResults([]);
+                }}
+                className="w-full px-3 py-2 text-left text-xs text-slate-800 hover:bg-slate-50"
+              >
+                {r.label}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 export function PlacesSearchInput({
   apiKey,
   district = 'Aizawl',
@@ -145,78 +251,65 @@ export function PlacesSearchInput({
   placeholder: string;
   onSelect: (place: { label: string; lat: number; lng: number }) => void;
 }) {
-  const [query, setQuery] = useState('');
-  const [results, setResults] = useState<Array<{ label: string; lat?: number; lng?: number; prediction?: google.maps.places.PlacePrediction }>>([]);
+  const cleanKey = (apiKey || '').trim();
+  const [useLocalFallback, setUseLocalFallback] = useState(!isValidGoogleMapsKey(cleanKey));
 
-  if (!apiKey) {
+  useEffect(() => {
+    setUseLocalFallback(!isValidGoogleMapsKey(cleanKey));
+  }, [cleanKey]);
+
+  useEffect(() => {
+    const onAuthFailure = () => setUseLocalFallback(true);
+    window.addEventListener('gmp-auth-failure', onAuthFailure);
+    return () => window.removeEventListener('gmp-auth-failure', onAuthFailure);
+  }, []);
+
+  if (useLocalFallback || !isValidGoogleMapsKey(cleanKey)) {
     return (
-      <div className="relative">
-        <input
-          type="text"
-          value={query}
-          onChange={(e) => {
-            const val = e.target.value;
-            setQuery(val);
-            if (!val.trim()) {
-              setResults([]);
-              return;
-            }
-            const qLower = val.toLowerCase();
-            const matched = ALL_MIZORAM_VENGS.filter(
-              (v) =>
-                v.name.toLowerCase().includes(qLower) ||
-                (v.label || '').toLowerCase().includes(qLower) ||
-                v.district.toLowerCase().includes(qLower)
-            )
-              .sort((a, b) => (a.district === district ? -1 : b.district === district ? 1 : 0))
-              .slice(0, 8)
-              .map((v) => ({ label: `${v.name} (${v.district}) · ${v.label}`, lat: v.lat, lng: v.lng }));
-            setResults(matched);
-          }}
-          placeholder={placeholder}
-          className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-teal-700 focus:outline-none"
-        />
-        {results.length > 0 && (
-          <ul className="absolute left-0 right-0 top-full z-30 mt-1 max-h-48 overflow-auto rounded-lg border border-slate-200 bg-white shadow-lg">
-            {results.map((r, i) => (
-              <li key={i}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (typeof r.lat === 'number' && typeof r.lng === 'number') {
-                      onSelect({ label: r.label, lat: r.lat, lng: r.lng });
-                    }
-                    setQuery(r.label);
-                    setResults([]);
-                  }}
-                  className="w-full px-3 py-2 text-left text-xs text-slate-800 hover:bg-slate-50"
-                >
-                  {r.label}
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
+      <LocalVengSearchInput district={district} placeholder={placeholder} onSelect={onSelect} />
     );
   }
 
-  return <GooglePlacesAutocompleteInner district={district} placeholder={placeholder} onSelect={onSelect} />;
+  return (
+    <MapsErrorBoundary
+      fallback={
+        <LocalVengSearchInput district={district} placeholder={placeholder} onSelect={onSelect} />
+      }
+    >
+      <APIProvider apiKey={cleanKey} libraries={['places']} language="en" region="IN">
+        <GooglePlacesAutocompleteInner
+          district={district}
+          placeholder={placeholder}
+          onSelect={onSelect}
+          onFallback={() => setUseLocalFallback(true)}
+        />
+      </APIProvider>
+    </MapsErrorBoundary>
+  );
 }
 
 function GooglePlacesAutocompleteInner({
   district,
   placeholder,
   onSelect,
+  onFallback,
 }: {
   district: MizoramDistrict;
   placeholder: string;
   onSelect: (place: { label: string; lat: number; lng: number }) => void;
+  onFallback: () => void;
 }) {
+  const status = useApiLoadingStatus();
   const placesLib = useMapsLibrary('places');
   const sessionTokenRef = useRef<google.maps.places.AutocompleteSessionToken | null>(null);
   const [query, setQuery] = useState('');
   const [suggestions, setSuggestions] = useState<google.maps.places.AutocompleteSuggestion[]>([]);
+
+  useEffect(() => {
+    if (status === APILoadingStatus.FAILED || status === APILoadingStatus.AUTH_FAILURE) {
+      onFallback();
+    }
+  }, [status, onFallback]);
 
   useEffect(() => {
     if (!placesLib || !query.trim()) {
@@ -224,37 +317,61 @@ function GooglePlacesAutocompleteInner({
       return;
     }
     const { AutocompleteSessionToken, AutocompleteSuggestion } = placesLib;
-    if (!sessionTokenRef.current) {
+    if (!AutocompleteSuggestion || typeof AutocompleteSuggestion.fetchAutocompleteSuggestions !== 'function') {
+      return;
+    }
+    if (!sessionTokenRef.current && AutocompleteSessionToken) {
       sessionTokenRef.current = new AutocompleteSessionToken();
     }
     let active = true;
     AutocompleteSuggestion.fetchAutocompleteSuggestions({
       input: `${query}, ${district}, Mizoram`,
-      sessionToken: sessionTokenRef.current,
+      sessionToken: sessionTokenRef.current || undefined,
     })
       .then((res) => {
-        if (active) setSuggestions(res.suggestions || []);
+        if (active) setSuggestions(res?.suggestions || []);
       })
-      .catch(() => {
+      .catch((err: unknown) => {
+        const msg = String(err);
+        if (
+          msg.includes('RESOURCE_EXHAUSTED') ||
+          msg.includes('429') ||
+          msg.includes('OVER_QUERY_LIMIT')
+        ) {
+          window.dispatchEvent(new CustomEvent('gmp-quota-exceeded'));
+          onFallback();
+        }
         if (active) setSuggestions([]);
       });
     return () => {
       active = false;
     };
-  }, [placesLib, query, district]);
+  }, [placesLib, query, district, onFallback]);
 
   const pickSuggestion = async (s: google.maps.places.AutocompleteSuggestion) => {
     if (!s.placePrediction) return;
-    const place = s.placePrediction.toPlace();
-    await place.fetchFields({ fields: ['displayName', 'formattedAddress', 'location'] });
-    const loc = place.location;
-    if (loc) {
-      const label = place.displayName || s.placePrediction.text.text;
-      onSelect({ label, lat: loc.lat(), lng: loc.lng() });
-      setQuery(label);
+    try {
+      const place = s.placePrediction.toPlace();
+      await place.fetchFields({ fields: ['displayName', 'formattedAddress', 'location'] });
+      const loc = place.location;
+      if (loc) {
+        const label = place.displayName || s.placePrediction.text.text;
+        onSelect({ label, lat: loc.lat(), lng: loc.lng() });
+        setQuery(label);
+      }
+    } catch (err: unknown) {
+      const msg = String(err);
+      if (
+        msg.includes('RESOURCE_EXHAUSTED') ||
+        msg.includes('429') ||
+        msg.includes('OVER_QUERY_LIMIT')
+      ) {
+        window.dispatchEvent(new CustomEvent('gmp-quota-exceeded'));
+      }
+    } finally {
+      sessionTokenRef.current = null;
+      setSuggestions([]);
     }
-    sessionTokenRef.current = null;
-    setSuggestions([]);
   };
 
   return (
@@ -264,10 +381,10 @@ function GooglePlacesAutocompleteInner({
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         placeholder={placeholder}
-        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-teal-700 focus:outline-none"
+        className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-teal-700 focus:outline-none"
       />
       {suggestions.length > 0 && (
-        <ul className="absolute left-0 right-0 top-full z-30 mt-1 max-h-48 overflow-auto rounded-lg border border-slate-200 bg-white shadow-lg">
+        <ul className="absolute left-0 right-0 top-full z-30 mt-1 max-h-48 overflow-auto rounded-xl border border-slate-200 bg-white shadow-lg">
           {suggestions.map((s, idx) => (
             <li key={idx}>
               <button
@@ -297,7 +414,6 @@ function GoogleMapInner({
 }: Omit<MizoramMapProps, 'apiKey' | 'heightClass'> & { onFallback: () => void }) {
   const status = useApiLoadingStatus();
   const [selectedPartner, setSelectedPartner] = useState<PartnerProfile | null>(null);
-  const [markerEl, setMarkerEl] = useState<google.maps.marker.AdvancedMarkerElement | null>(null);
   const center = districtCenter || getDistrictInfo(district).center || DEFAULT_MIZORAM_CENTER;
 
   useEffect(() => {
@@ -343,12 +459,7 @@ function GoogleMapInner({
           key={p.id}
           position={{ lat: p.lat, lng: p.lng }}
           title={`${p.name} (${p.category} · ${p.district || district})`}
-          onClick={(e) => {
-            setSelectedPartner(p);
-            const target = (e as unknown as { domEvent?: { target?: HTMLElement } })?.domEvent?.target;
-            void target;
-            setMarkerEl(null);
-          }}
+          onClick={() => setSelectedPartner(p)}
         >
           <Pin
             background={p.online ? (p.category === 'walker' ? '#059669' : '#0284C7') : '#94A3B8'}
@@ -369,7 +480,6 @@ function GoogleMapInner({
 
       {selectedPartner && (
         <InfoWindow
-          anchor={markerEl}
           position={{ lat: selectedPartner.lat, lng: selectedPartner.lng }}
           onCloseClick={() => setSelectedPartner(null)}
         >
@@ -601,37 +711,50 @@ export const MizoramMap: React.FC<MizoramMapProps> = ({
   sosTickets,
   heightClass = 'h-72 lg:h-80',
 }) => {
-  const [useFallback, setUseFallback] = useState(!apiKey);
+  const cleanKey = (apiKey || '').trim();
+  const [useFallback, setUseFallback] = useState(!isValidGoogleMapsKey(cleanKey));
 
   useEffect(() => {
-    setUseFallback(!apiKey);
-  }, [apiKey]);
+    setUseFallback(!isValidGoogleMapsKey(cleanKey));
+  }, [cleanKey]);
+
+  useEffect(() => {
+    const onAuthFailure = () => setUseFallback(true);
+    window.addEventListener('gmp-auth-failure', onAuthFailure);
+    return () => window.removeEventListener('gmp-auth-failure', onAuthFailure);
+  }, []);
+
+  const fallbackElement = (
+    <DistrictTerrainVectorMap
+      district={district}
+      districtVengs={districtVengs}
+      origin={origin}
+      stops={stops}
+      destination={destination}
+      partners={partners}
+      sosTickets={sosTickets}
+    />
+  );
 
   return (
     <div className={`w-full ${heightClass} rounded-xl overflow-hidden`} data-testid="mizoram-map-container">
-      {!useFallback && apiKey ? (
-        <APIProvider apiKey={apiKey} libraries={['places', 'routes', 'marker']} language="en" region="IN">
-          <GoogleMapInner
-            district={district}
-            districtCenter={districtCenter}
-            origin={origin}
-            stops={stops}
-            destination={destination}
-            partners={partners}
-            sosTickets={sosTickets}
-            onFallback={() => setUseFallback(true)}
-          />
-        </APIProvider>
+      {!useFallback && isValidGoogleMapsKey(cleanKey) ? (
+        <MapsErrorBoundary fallback={fallbackElement}>
+          <APIProvider apiKey={cleanKey} libraries={['places', 'routes', 'marker']} language="en" region="IN">
+            <GoogleMapInner
+              district={district}
+              districtCenter={districtCenter}
+              origin={origin}
+              stops={stops}
+              destination={destination}
+              partners={partners}
+              sosTickets={sosTickets}
+              onFallback={() => setUseFallback(true)}
+            />
+          </APIProvider>
+        </MapsErrorBoundary>
       ) : (
-        <DistrictTerrainVectorMap
-          district={district}
-          districtVengs={districtVengs}
-          origin={origin}
-          stops={stops}
-          destination={destination}
-          partners={partners}
-          sosTickets={sosTickets}
-        />
+        fallbackElement
       )}
     </div>
   );

@@ -761,6 +761,31 @@
   ],
   "products": [
     {
+      "id": "prd-74636",
+      "shopId": "shop-aizawl-dawrpui",
+      "shopName": "Test",
+      "district": "Aizawl",
+      "veng": "Dawrpui",
+      "titleEn": "Handcrafted Bamboo Basket",
+      "titleMiz": "Mau Siam Bawm",
+      "category": "Home & Handicrafts",
+      "hygieneCategory": "standard",
+      "checkBeforePayEligible": true,
+      "price": 500,
+      "color": "Natural Bamboo",
+      "size": "Medium",
+      "tags": [
+        "bamboo",
+        "basket",
+        "handicraft",
+        "mizo",
+        "eco-friendly",
+        "dawrpui"
+      ],
+      "imageUrl": "/src/assets/images/market_bamboo_craft_1794891320417.jpg",
+      "stock": 10
+    },
+    {
       "id": "prd-1",
       "shopId": "shop-dawrpui-craft",
       "shopName": "Zoram Loom & Bamboo",
@@ -926,7 +951,10 @@
       "portfolioUrls": [
         "/src/assets/images/staffing_caregiver_portrait_1794891321006.jpg"
       ],
-      "rating": 4.96
+      "rating": 4.96,
+      "availabilityStatus": "active",
+      "bankAccountMasked": "SBI •••• 4821",
+      "verifiedBadge": "Company Certified"
     },
     {
       "id": "wrk-2",
@@ -952,7 +980,10 @@
       "portfolioUrls": [
         "/src/assets/images/mizoram_hero_hills_1794891319409.jpg"
       ],
-      "rating": 4.89
+      "rating": 4.89,
+      "availabilityStatus": "active",
+      "bankAccountMasked": "MRB •••• 2041",
+      "verifiedBadge": "Police Verified - Green Shield"
     },
     {
       "id": "wrk-3",
@@ -978,10 +1009,91 @@
       "portfolioUrls": [
         "/src/assets/images/partner_hill_rider_1794891322041.jpg"
       ],
-      "rating": 4.94
+      "rating": 4.94,
+      "availabilityStatus": "active",
+      "bankAccountMasked": "MRB •••• 9104",
+      "verifiedBadge": "Company Certified"
     }
   ],
-  "staffingBookings": [],
+  "staffingBookings": [
+    {
+      "id": "stf-101",
+      "workerId": "wrk-1",
+      "workerName": "Lalhmangaihi Khiangte",
+      "mode": "company_managed_staffing",
+      "customerName": "Dr. Zoramthanga Household (Khatla)",
+      "isOutstationOrLiveIn": true,
+      "accommodationProvided": true,
+      "foodProvided": true,
+      "travelCovered": true,
+      "allInclusiveAmount": 14500,
+      "contractId": "CTR-MZ-261101",
+      "tripartiteAgreement": true,
+      "workerSosActive": false,
+      "status": "active",
+      "createdAt": "2026-11-21T23:20:44.196Z"
+    },
+    {
+      "id": "stf-102",
+      "workerId": "wrk-3",
+      "workerName": "Remsangpuii Vanchhawng",
+      "mode": "company_managed_staffing",
+      "customerName": "Pu Lalmuana Family (Chaltlang)",
+      "isOutstationOrLiveIn": false,
+      "accommodationProvided": false,
+      "foodProvided": true,
+      "travelCovered": true,
+      "allInclusiveAmount": 18500,
+      "contractId": "CTR-MZ-261102",
+      "tripartiteAgreement": true,
+      "workerSosActive": false,
+      "status": "active",
+      "createdAt": "2026-11-21T23:20:44.196Z"
+    }
+  ],
+  "staffLeaveRequests": [
+    {
+      "id": "lvr-201",
+      "workerId": "wrk-1",
+      "workerName": "Lalhmangaihi Khiangte",
+      "bookingId": "stf-101",
+      "fromDate": "2026-11-26",
+      "toDate": "2026-11-27",
+      "reason": "Family church fellowship visit to Serchhip — requesting 2-day backup Awmpui.",
+      "needsInstantReplacement": true,
+      "status": "pending",
+      "createdAt": "2026-11-21T23:20:44.196Z"
+    }
+  ],
+  "staffAttendanceLogs": [
+    {
+      "id": "att-65014",
+      "workerId": "wrk-1",
+      "workerName": "Lalhmangaihi Khiangte",
+      "date": "2026-11-21",
+      "checkInTime": "11:21 pm",
+      "status": "present",
+      "veng": "Khatla"
+    },
+    {
+      "id": "att-101",
+      "workerId": "wrk-1",
+      "workerName": "Lalhmangaihi Khiangte",
+      "date": "2026-11-21",
+      "checkInTime": "07:15 AM",
+      "status": "present",
+      "veng": "Khatla"
+    },
+    {
+      "id": "att-102",
+      "workerId": "wrk-3",
+      "workerName": "Remsangpuii Vanchhawng",
+      "date": "2026-11-21",
+      "checkInTime": "07:45 AM",
+      "status": "present",
+      "veng": "Chaltlang"
+    }
+  ],
   "payrollRecords": [
     {
       "id": "pay-2026-11-01",
@@ -1050,6 +1162,32 @@
   ],
   "kycQueue": [
     {
+      "id": "kyc-72365",
+      "applicantName": "Lalrinmawii Sailo",
+      "phone": "9862011223",
+      "targetCategory": "staff",
+      "staffMode": "company_managed_staffing",
+      "roleTitle": "Company-Managed Awmpui & Home Caregiver",
+      "expectedMonthlyRate": 14500,
+      "skills": [
+        "Housekeeping",
+        "Mizo Cooking",
+        "Elderly Care"
+      ],
+      "outstationAvailable": true,
+      "liveInAvailable": true,
+      "district": "Aizawl",
+      "veng": "Dawrpui",
+      "aadhaarMasked": "XXXX-XXXX-7741",
+      "voterIdNumber": "MIZ/01/558120",
+      "pvcNumber": "Pending Verification",
+      "ymaVcReference": "Khatla Branch YMA Secretary",
+      "resumeSummary": "3 years full-time elderly care and housekeeping in Aizawl",
+      "practicalTestScore": 88,
+      "documentSignedToken": "pending-issue",
+      "status": "pending"
+    },
+    {
       "id": "kyc-401",
       "applicantName": "K. Lalbiakdika",
       "targetCategory": "auto_taxi",
@@ -1114,6 +1252,55 @@
     }
   ],
   "auditLogs": [
+    {
+      "id": "aud-1795303272365-0i63",
+      "actor": "Lalrinmawii Sailo",
+      "action": "KYC_APPLICATION_SUBMITTED",
+      "detail": "kyc-72365 (staff) · Aizawl · Dawrpui",
+      "at": "2026-11-21T23:21:12.365Z"
+    },
+    {
+      "id": "aud-1795303265036-hr5o",
+      "actor": "Lalhmangaihi Khiangte",
+      "action": "STAFF_ATTENDANCE",
+      "detail": "2026-11-21 11:21 pm (present)",
+      "at": "2026-11-21T23:21:05.036Z"
+    },
+    {
+      "id": "aud-1795281972851-n5sk",
+      "actor": "super-admin",
+      "action": "ADMIN_LOGIN",
+      "detail": "Super Admin session authenticated",
+      "at": "2026-11-21T17:26:12.851Z"
+    },
+    {
+      "id": "aud-1795281949450-aey0",
+      "actor": "super-admin",
+      "action": "ADMIN_LOGIN",
+      "detail": "Super Admin session authenticated",
+      "at": "2026-11-21T17:25:49.450Z"
+    },
+    {
+      "id": "aud-1795281674636-mdo9",
+      "actor": "Test",
+      "action": "AI_MAGIC_LISTING",
+      "detail": "Created Handcrafted Bamboo Basket (Mau Siam Bawm)",
+      "at": "2026-11-21T17:21:14.636Z"
+    },
+    {
+      "id": "aud-1795281627722-l3mw",
+      "actor": "super-admin",
+      "action": "DEV_STUDIO_2FA_UNLOCKED",
+      "detail": "Authenticated session opened for /admin/dev-studio",
+      "at": "2026-11-21T17:20:27.722Z"
+    },
+    {
+      "id": "aud-1795281342157-73rq",
+      "actor": "super-admin",
+      "action": "DEV_STUDIO_2FA_UNLOCKED",
+      "detail": "Authenticated session opened for /admin/dev-studio",
+      "at": "2026-11-21T17:15:42.157Z"
+    },
     {
       "id": "aud-1794896944196-qtg2",
       "actor": "Pu Vanlalrema",

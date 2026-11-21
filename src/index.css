@@ -10,7 +10,7 @@
 
   body {
     font-family: var(--font-sans);
-    background-color: #f8fafc;
+    background-color: #f4f6f5;
     color: #0f172a;
   }
 
@@ -28,6 +28,103 @@
   font-variant-numeric: tabular-nums;
 }
 
+.pt-safe {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
 .pb-safe {
   padding-bottom: env(safe-area-inset-bottom, 0px);
 }
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+@media (display-mode: standalone) {
+  html,
+  body {
+    overscroll-behavior-y: contain;
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+button,
+a,
+select {
+  touch-action: manipulation;
+}
+
+@keyframes layerBackdropIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes layerSheetUp {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 24px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes layerWindowPop {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 12px, 0) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+.layer-backdrop-enter {
+  animation: layerBackdropIn 160ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.layer-sheet-enter {
+  animation: layerSheetUp 190ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@media (min-width: 640px) {
+  .layer-sheet-enter {
+    animation: layerWindowPop 180ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .layer-backdrop-enter,
+  .layer-sheet-enter {
+    animation: none;
+  }
+}
+
+html.reduce-motion .layer-backdrop-enter,
+html.reduce-motion .layer-sheet-enter {
+  animation: none !important;
+}
+
+html.reduce-motion *,
+html.reduce-motion *::before,
+html.reduce-motion *::after {
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}
+
+html.text-scale-large {
+  font-size: 109%;
+}
+
+

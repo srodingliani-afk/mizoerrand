@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 
 const SIGNING_SECRET =
-  process.env.SIGNED_URL_SECRET || 'zorun-ap-south-1-ephemeral-media-signing-key';
+  process.env.SIGNED_URL_SECRET?.trim() || crypto.randomBytes(32).toString('hex');
 
 interface SignedMediaPayload {
   resourceId: string;

@@ -43,9 +43,13 @@ export const MerchantView: React.FC<MerchantViewProps> = ({
   const handleImagePick = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const webp = await compressImageToWebP(file, 960);
-    setImageBase64(webp);
-    setImageMimeType('image/webp');
+    try {
+      const webp = await compressImageToWebP(file, 960);
+      setImageBase64(webp);
+      setImageMimeType('image/webp');
+    } catch {
+      setAiResult({ error: 'Could not process product photo.' });
+    }
   };
 
   const handleMagicListing = async (e: React.FormEvent) => {
@@ -65,7 +69,7 @@ export const MerchantView: React.FC<MerchantViewProps> = ({
           imageMimeType: imageBase64 ? imageMimeType : undefined,
         }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setAiResult({ error: data.error || 'AI Magic Listing failed' });
       } else {
@@ -84,14 +88,20 @@ export const MerchantView: React.FC<MerchantViewProps> = ({
   const handleMerchantReply = async (orderId: string) => {
     const text = replyDrafts[orderId]?.trim();
     if (!text) return;
-    const res = await fetch(`/api/marketplace/orders/${orderId}/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sender: 'merchant', text }),
-    });
-    if (res.ok) {
-      setReplyDrafts((p) => ({ ...p, [orderId]: '' }));
-      await onRefresh();
+    try {
+      const res = await fetch(`/api/marketplace/orders/${orderId}/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sender: 'merchant', text }),
+      });
+      if (res.ok) {
+        setReplyDrafts((p) => ({ ...p, [orderId]: '' }));
+        await onRefresh();
+      } else {
+        setAiResult({ error: 'Could not send merchant message.' });
+      }
+    } catch {
+      setAiResult({ error: 'Network error sending merchant message.' });
     }
   };
 

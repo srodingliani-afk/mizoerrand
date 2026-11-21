@@ -3,7 +3,11 @@ import { BellRing, Camera, CheckCircle2, Navigation, Radio, Wallet } from 'lucid
 import type { AppRemoteConfig, ErrandRequest, Language, MizoramDistrict, PartnerProfile } from '../shared/types';
 import { TRANSLATIONS } from '../i18n/translations';
 import { ALL_MIZORAM_DISTRICT_NAMES } from '../data/mizoramDistricts';
-import { detectPartnerWrapperEnvironment, triggerEmergencySirenTone } from '../lib/nativeBridge';
+import {
+  detectPartnerWrapperEnvironment,
+  triggerEmergencySirenTone,
+  triggerHaptic,
+} from '../lib/nativeBridge';
 import { compressImageToWebP } from '../lib/offlineCache';
 
 interface PartnerViewProps {
@@ -72,43 +76,76 @@ export const PartnerView: React.FC<PartnerViewProps> = ({
 
   const handleToggleOnline = async () => {
     if (!activePartner) return;
-    await fetch(`/api/errands/partners/${activePartner.id}/heartbeat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ online: !activePartner.online }),
-    });
-    await onRefresh();
+    triggerHaptic('medium');
+    try {
+      const res = await fetch(`/api/errands/partners/${activePartner.id}/heartbeat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ online: !activePartner.online }),
+      });
+      if (!res.ok) {
+        triggerHaptic('error');
+        const data = await res.json().catch(() => ({}));
+        setFeedback({ type: 'err', msg: data.error || 'Could not update online status.' });
+        return;
+      }
+      await onRefresh();
+    } catch {
+      triggerHaptic('error');
+      setFeedback({ type: 'err', msg: 'Network error updating online status.' });
+    }
   };
 
-  const handleBackgroundGpsPing = () => {
+  const handleBackgroundGpsPing = async () => {
     if (!activePartner) return;
+    triggerHaptic('sync');
     const jitterLat = activePartner.lat + (Math.random() - 0.5) * 0.0012;
     const jitterLng = activePartner.lng + (Math.random() - 0.5) * 0.0012;
-    fetch(`/api/errands/partners/${activePartner.id}/heartbeat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ lat: jitterLat, lng: jitterLng, online: true }),
-    }).then(() => {
-      setFeedback({ type: 'ok', msg: `Background GPS synced to Upstash Redis (${jitterLat.toFixed(4)}, ${jitterLng.toFixed(4)}).` });
-      void onRefresh();
-    });
+    try {
+      const res = await fetch(`/api/errands/partners/${activePartner.id}/heartbeat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lat: jitterLat, lng: jitterLng, online: true }),
+      });
+      if (!res.ok) {
+        triggerHaptic('error');
+        setFeedback({ type: 'err', msg: 'Could not sync background GPS.' });
+        return;
+      }
+      setFeedback({
+        type: 'ok',
+        msg: `Background GPS synced to Upstash Redis (${jitterLat.toFixed(4)}, ${jitterLng.toFixed(4)}).`,
+      });
+      await onRefresh();
+    } catch {
+      triggerHaptic('error');
+      setFeedback({ type: 'err', msg: 'Network error syncing background GPS.' });
+    }
   };
 
   const handleSubmitBid = async (jobId: string, fallbackAmt: number) => {
     if (!activePartner) return;
+    triggerHaptic('booking');
     const amt = Number(bidDrafts[jobId] || fallbackAmt);
-    const res = await fetch(`/api/errands/jobs/${jobId}/bids`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ partnerId: activePartner.id, bidAmount: amt, etaMinutes: 9 }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      setFeedback({ type: 'err', msg: data.error || 'Bid rejected' });
-    } else {
-      setFeedback({ type: 'ok', msg: `Counter-offer Rs. ${amt} sent to customer.` });
-      await loadStrictJobs(activePartner.id);
-      await onRefresh();
+    try {
+      const res = await fetch(`/api/errands/jobs/${jobId}/bids`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ partnerId: activePartner.id, bidAmount: amt, etaMinutes: 9 }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        triggerHaptic('error');
+        setFeedback({ type: 'err', msg: data.error || 'Bid rejected' });
+      } else {
+        triggerHaptic('success');
+        setFeedback({ type: 'ok', msg: `Counter-offer Rs. ${amt} sent to customer.` });
+        await loadStrictJobs(activePartner.id);
+        await onRefresh();
+      }
+    } catch {
+      triggerHaptic('error');
+      setFeedback({ type: 'err', msg: 'Network error submitting bid.' });
     }
   };
 
@@ -117,64 +154,102 @@ export const PartnerView: React.FC<PartnerViewProps> = ({
     stage: 'before' | 'after',
     file?: File
   ) => {
-    let proofUrl: string | undefined;
-    if (file) {
-      proofUrl = await compressImageToWebP(file, 800);
-    }
-    const res = await fetch(`/api/errands/jobs/${jobId}/proof`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ stage, proofUrl }),
-    });
-    if (res.ok) {
+    triggerHaptic('light');
+    try {
+      let proofUrl: string | undefined;
+      if (file) {
+        proofUrl = await compressImageToWebP(file, 800);
+      }
+      const res = await fetch(`/api/errands/jobs/${jobId}/proof`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stage, proofUrl }),
+      });
+      if (!res.ok) {
+        triggerHaptic('error');
+        const data = await res.json().catch(() => ({}));
+        setFeedback({ type: 'err', msg: data.error || 'Could not upload proof photo.' });
+        return;
+      }
+      triggerHaptic('success');
       setFeedback({ type: 'ok', msg: `Mandatory ${stage.toUpperCase()} proof saved.` });
       if (activePartner) await loadStrictJobs(activePartner.id);
       await onRefresh();
+    } catch {
+      triggerHaptic('error');
+      setFeedback({ type: 'err', msg: 'Network error saving proof photo.' });
     }
   };
 
   const handleCompleteOtp = async (jobId: string) => {
+    triggerHaptic('medium');
     const otpCode = otpDrafts[jobId]?.trim();
-    const res = await fetch(`/api/errands/jobs/${jobId}/complete-otp`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ otpCode }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      setFeedback({ type: 'err', msg: data.error || 'OTP failed' });
-    } else {
-      setFeedback({
-        type: 'ok',
-        msg: `OTP verified! Escrow settled Rs. ${data.ledger?.partnerPayout ?? 'payout'} to your wallet.`,
+    try {
+      const res = await fetch(`/api/errands/jobs/${jobId}/complete-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ otpCode }),
       });
-      if (activePartner) await loadStrictJobs(activePartner.id);
-      await onRefresh();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        triggerHaptic('error');
+        setFeedback({ type: 'err', msg: data.error || 'OTP failed' });
+      } else {
+        triggerHaptic('success');
+        setFeedback({
+          type: 'ok',
+          msg: `OTP verified! Escrow settled Rs. ${data.ledger?.partnerPayout ?? 'payout'} to your wallet.`,
+        });
+        if (activePartner) await loadStrictJobs(activePartner.id);
+        await onRefresh();
+      }
+    } catch {
+      triggerHaptic('error');
+      setFeedback({ type: 'err', msg: 'Network error verifying OTP.' });
     }
   };
 
   const handleDepositCod = async () => {
     if (!activePartner) return;
-    const res = await fetch(`/api/escrow/partners/${activePartner.id}/deposit-cod`, { method: 'POST' });
-    if (res.ok) {
+    triggerHaptic('medium');
+    try {
+      const res = await fetch(`/api/escrow/partners/${activePartner.id}/deposit-cod`, { method: 'POST' });
+      if (!res.ok) {
+        triggerHaptic('error');
+        const data = await res.json().catch(() => ({}));
+        setFeedback({ type: 'err', msg: data.error || 'COD deposit failed.' });
+        return;
+      }
+      triggerHaptic('success');
       setFeedback({ type: 'ok', msg: 'COD Cash deposited via UPI. New COD jobs unlocked.' });
       await onRefresh();
+    } catch {
+      triggerHaptic('error');
+      setFeedback({ type: 'err', msg: 'Network error depositing COD.' });
     }
   };
 
   const handleWithdrawWallet = async () => {
     if (!activePartner) return;
-    const res = await fetch(`/api/escrow/partners/${activePartner.id}/withdraw`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ amount: 500 }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      setFeedback({ type: 'err', msg: data.error || 'Withdrawal failed' });
-    } else {
-      setFeedback({ type: 'ok', msg: `Withdrew Rs. ${data.withdrawn} via instant UPI/IMPS.` });
-      await onRefresh();
+    triggerHaptic('medium');
+    try {
+      const res = await fetch(`/api/escrow/partners/${activePartner.id}/withdraw`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ amount: 500 }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        triggerHaptic('error');
+        setFeedback({ type: 'err', msg: data.error || 'Withdrawal failed' });
+      } else {
+        triggerHaptic('success');
+        setFeedback({ type: 'ok', msg: `Withdrew Rs. ${data.withdrawn} via instant UPI/IMPS.` });
+        await onRefresh();
+      }
+    } catch {
+      triggerHaptic('error');
+      setFeedback({ type: 'err', msg: 'Network error processing withdrawal.' });
     }
   };
 

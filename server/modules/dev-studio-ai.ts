@@ -1,41 +1,71 @@
-import { Router, type Request, type Response, type NextFunction } from 'express';
+import { Router } from 'express';
 import fs from 'fs';
 import path from 'path';
-import crypto from 'crypto';
 import { Type, type Content, type FunctionDeclaration } from '@google/genai';
 import { db } from '../infrastructure/store';
 import { getGeminiClient } from '../infrastructure/geminiClient';
 import { realtimeHub } from '../infrastructure/realtimeHub';
 import { evaluateSduiServiceVisibility } from '../domain/rules';
+import {
+  claimInitialAdminPasscode,
+  extractAdminToken,
+  getAdminAuthStatus,
+  isValidAdminToken,
+  requireAdminAuth,
+  revokeAdminSession,
+  verifyAdminPasscode,
+} from '../infrastructure/adminAuth';
 import type { AppRemoteConfig, SystemPlugin } from '../../src/shared/types';
 
 export const devStudioAiRouter = Router();
 
-const activeSessions = new Set<string>();
-const EXPECTED_2FA_PIN = process.env.SUPER_ADMIN_2FA_PIN || '482910';
-
-function requireDevStudioAuth(req: Request, res: Response, next: NextFunction): void {
-  const token = req.header('x-dev-studio-token');
-  if (!token || !activeSessions.has(token)) {
-    res.status(401).json({ error: 'Super-Admin 2FA verification required' });
-    return;
-  }
-  next();
-}
-
-devStudioAiRouter.post('/verify-2fa', (req, res) => {
-  const { pin } = req.body as { pin?: string };
-  if (!pin || pin.trim() !== EXPECTED_2FA_PIN) {
-    res.status(403).json({ error: 'Invalid Super-Admin 2FA code.' });
-    return;
-  }
-  const token = crypto.randomBytes(24).toString('hex');
-  activeSessions.add(token);
-  db.addAudit('super-admin', 'DEV_STUDIO_2FA_UNLOCKED', 'Authenticated session opened for /admin/dev-studio');
-  res.json({ token, authenticated: true });
+devStudioAiRouter.get('/auth-status', (req, res) => {
+  const status = getAdminAuthStatus();
+  const token = extractAdminToken(req);
+  res.json({
+    ...status,
+    authenticated: isValidAdminToken(token),
+  });
 });
 
-devStudioAiRouter.get('/workspace', requireDevStudioAuth, (_req, res) => {
+devStudioAiRouter.post('/setup-admin', (req, res) => {
+  const { pin, passcode } = req.body as { pin?: string; passcode?: string };
+  const secret = typeof passcode === 'string' ? passcode : typeof pin === 'string' ? pin : '';
+  const result = claimInitialAdminPasscode(secret);
+  if (!result.ok) {
+    res.status(result.status).json({ error: result.error });
+    return;
+  }
+  res.status(201).json({
+    token: result.token,
+    source: result.source,
+    expiresAt: result.expiresAt,
+    authenticated: true,
+  });
+});
+
+devStudioAiRouter.post('/verify-2fa', (req, res) => {
+  const { pin, passcode } = req.body as { pin?: string; passcode?: string };
+  const secret = typeof passcode === 'string' ? passcode : typeof pin === 'string' ? pin : '';
+  const result = verifyAdminPasscode(req, secret);
+  if (!result.ok) {
+    res.status(result.status).json({ error: result.error });
+    return;
+  }
+  res.json({
+    token: result.token,
+    source: result.source,
+    expiresAt: result.expiresAt,
+    authenticated: true,
+  });
+});
+
+devStudioAiRouter.post('/logout', (req, res) => {
+  revokeAdminSession(extractAdminToken(req));
+  res.json({ ok: true });
+});
+
+devStudioAiRouter.get('/workspace', requireAdminAuth, (_req, res) => {
   const state = db.get();
   res.json({
     plugins: state.plugins,
@@ -50,7 +80,7 @@ devStudioAiRouter.get('/workspace', requireDevStudioAuth, (_req, res) => {
   });
 });
 
-devStudioAiRouter.post('/plugins', requireDevStudioAuth, (req, res) => {
+devStudioAiRouter.post('/plugins', requireAdminAuth, (req, res) => {
   const { id, key, name, description, module, code, enabled } = req.body as Partial<SystemPlugin>;
   const state = db.get();
   const now = new Date().toISOString();
@@ -95,7 +125,7 @@ devStudioAiRouter.post('/plugins', requireDevStudioAuth, (req, res) => {
   res.status(201).json({ plugin: created });
 });
 
-devStudioAiRouter.delete('/plugins/:id', requireDevStudioAuth, (req, res) => {
+devStudioAiRouter.delete('/plugins/:id', requireAdminAuth, (req, res) => {
   const state = db.get();
   const idx = state.plugins.findIndex((p) => p.id === req.params.id);
   if (idx === -1) {
@@ -108,7 +138,7 @@ devStudioAiRouter.delete('/plugins/:id', requireDevStudioAuth, (req, res) => {
   res.json({ deleted: removed.id });
 });
 
-devStudioAiRouter.post('/sandbox', requireDevStudioAuth, (req, res) => {
+devStudioAiRouter.post('/sandbox', requireAdminAuth, (req, res) => {
   const patch = req.body as Partial<AppRemoteConfig>;
   const state = db.get();
   const base = state.sandboxConfig || state.remoteConfig;
@@ -128,7 +158,7 @@ devStudioAiRouter.post('/sandbox', requireDevStudioAuth, (req, res) => {
   });
 });
 
-devStudioAiRouter.post('/publish', requireDevStudioAuth, (req, res) => {
+devStudioAiRouter.post('/publish', requireAdminAuth, (req, res) => {
   const { label } = req.body as { label?: string };
   const state = db.get();
   const now = new Date().toISOString();
@@ -169,7 +199,7 @@ devStudioAiRouter.post('/publish', requireDevStudioAuth, (req, res) => {
   });
 });
 
-devStudioAiRouter.post('/rollback', requireDevStudioAuth, (req, res) => {
+devStudioAiRouter.post('/rollback', requireAdminAuth, (req, res) => {
   const { snapshotId } = req.body as { snapshotId?: string };
   const state = db.get();
   const snap = snapshotId
@@ -294,9 +324,14 @@ function executeArchitectTool(name: string, args: Record<string, unknown>): Reco
         })),
       };
     }
+    const allowedRoots = [
+      path.resolve(process.cwd(), 'src') + path.sep,
+      path.resolve(process.cwd(), 'server') + path.sep,
+    ];
     const resolved = path.resolve(process.cwd(), targetPath.replace(/^\/+/, ''));
-    if (!resolved.startsWith(process.cwd()) || !fs.existsSync(resolved)) {
-      return { error: `File not found: ${targetPath}` };
+    const inAllowedRoot = allowedRoots.some((root) => resolved.startsWith(root));
+    if (!inAllowedRoot || !fs.existsSync(resolved) || fs.statSync(resolved).isDirectory()) {
+      return { error: `File not accessible or not found: ${targetPath}` };
     }
     const content = fs.readFileSync(resolved, 'utf8');
     return { targetPath, content: content.slice(0, 6000) };
@@ -401,7 +436,7 @@ function executeArchitectTool(name: string, args: Record<string, unknown>): Reco
   return { error: `Unknown tool: ${name}` };
 }
 
-devStudioAiRouter.post('/ai-architect', requireDevStudioAuth, async (req, res) => {
+devStudioAiRouter.post('/ai-architect', requireAdminAuth, async (req, res) => {
   const { prompt } = req.body as { prompt?: string };
   if (!prompt || !prompt.trim()) {
     res.status(400).json({ error: 'Prompt is required' });

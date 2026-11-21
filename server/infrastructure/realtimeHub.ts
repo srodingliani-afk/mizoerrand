@@ -21,6 +21,10 @@ class RealtimeHub {
     });
   }
 
+  getClientCount(): number {
+    return this.clients.size;
+  }
+
   broadcast(type: RealtimeEventType, payload: unknown): void {
     const frame = `event: ${type}\ndata: ${JSON.stringify({ type, payload, ts: Date.now() })}\n\n`;
     for (const client of this.clients) {

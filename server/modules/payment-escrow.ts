@@ -1,10 +1,11 @@
 import { Router } from 'express';
 import { db } from '../infrastructure/store';
 import { realtimeHub } from '../infrastructure/realtimeHub';
+import { requireAdminAuth } from '../infrastructure/adminAuth';
 
 export const paymentEscrowRouter = Router();
 
-paymentEscrowRouter.get('/ledger', (_req, res) => {
+paymentEscrowRouter.get('/ledger', requireAdminAuth, (_req, res) => {
   const state = db.get();
   res.json({
     ledger: state.escrowLedger,
@@ -47,7 +48,7 @@ paymentEscrowRouter.post('/partners/:id/withdraw', (req, res) => {
   res.json({ partner, withdrawn: withdrawAmt });
 });
 
-paymentEscrowRouter.post('/webhooks/razorpay-reconcile', (req, res) => {
+paymentEscrowRouter.post('/webhooks/razorpay-reconcile', requireAdminAuth, (req, res) => {
   const { ledgerId } = req.body as { ledgerId?: string };
   const state = db.get();
   const entry = ledgerId
@@ -63,7 +64,7 @@ paymentEscrowRouter.post('/webhooks/razorpay-reconcile', (req, res) => {
   res.json({ entry });
 });
 
-paymentEscrowRouter.post('/disputes/:id/resolve', (req, res) => {
+paymentEscrowRouter.post('/disputes/:id/resolve', requireAdminAuth, (req, res) => {
   const { resolution, blacklistCustomer } = req.body as {
     resolution: 'resolved_refund' | 'resolved_payout' | 'blacklisted';
     blacklistCustomer?: boolean;

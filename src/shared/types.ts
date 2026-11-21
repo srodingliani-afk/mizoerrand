@@ -1,6 +1,15 @@
 export type Language = 'en' | 'miz';
 
-export type AppMode = 'customer' | 'partner' | 'merchant' | 'admin' | 'dev_studio';
+export type AppMode =
+  | 'customer'
+  | 'partner'
+  | 'staff'
+  | 'merchant'
+  | 'technician'
+  | 'apply'
+  | 'admin'
+  | 'dev_studio'
+  | 'backend';
 
 export type MizoramDistrict =
   | 'Aizawl'
@@ -45,7 +54,14 @@ export type EmergencyCategory =
   | 'electrician_power'
   | 'roadside_mechanic_towing'
   | 'locksmith'
-  | 'medical_urgent_cab';
+  | 'medical_urgent_cab'
+  | 'ambulance_oxygen'
+  | 'night_pharmacy_run'
+  | 'lpg_gas_leak'
+  | 'landslide_drain_clear'
+  | 'water_tanker_urgent'
+  | 'tyre_puncture_fuel'
+  | 'women_night_escort';
 
 export interface LatLng {
   lat: number;
@@ -164,9 +180,12 @@ export interface MarketplaceOrder {
   createdAt: string;
 }
 
+export type WorkforceAvailability = 'active' | 'on_leave' | 'suspended';
+
 export interface WorkforceMember {
   id: string;
   name: string;
+  phone?: string;
   mode: 'on_demand_workforce' | 'company_managed_staffing';
   roleTitle: string;
   roleTitleMiz: string;
@@ -181,6 +200,9 @@ export interface WorkforceMember {
   outstationAvailable: boolean;
   liveInAvailable: boolean;
   replacementGuarantee: boolean;
+  availabilityStatus?: WorkforceAvailability;
+  bankAccountMasked?: string;
+  verifiedBadge?: TrustBadge;
   avatarUrl: string;
   portfolioUrls: string[];
   rating: number;
@@ -200,8 +222,36 @@ export interface StaffingBooking {
   contractId: string;
   tripartiteAgreement: boolean;
   workerSosActive: boolean;
+  sosResolvedAt?: string;
+  sosResolutionNote?: string;
+  replacementWorkerId?: string;
+  replacementWorkerName?: string;
   status: 'active' | 'completed';
   createdAt: string;
+}
+
+export interface StaffLeaveRequest {
+  id: string;
+  workerId: string;
+  workerName: string;
+  bookingId?: string;
+  fromDate: string;
+  toDate: string;
+  reason: string;
+  needsInstantReplacement: boolean;
+  status: 'pending' | 'approved' | 'rejected';
+  reviewedBy?: string;
+  createdAt: string;
+}
+
+export interface StaffAttendanceLog {
+  id: string;
+  workerId: string;
+  workerName: string;
+  date: string;
+  checkInTime: string;
+  status: 'present' | 'half_day' | 'on_leave';
+  veng: string;
 }
 
 export interface PayrollRecord {
@@ -241,7 +291,15 @@ export interface EmergencySosTicket {
 export interface KycQueueItem {
   id: string;
   applicantName: string;
+  phone?: string;
   targetCategory: PartnerCategory | 'staff';
+  staffMode?: 'on_demand_workforce' | 'company_managed_staffing';
+  roleTitle?: string;
+  expectedMonthlyRate?: number;
+  expectedDailyRate?: number;
+  skills?: string[];
+  outstationAvailable?: boolean;
+  liveInAvailable?: boolean;
   district?: MizoramDistrict;
   veng: string;
   aadhaarMasked: string;

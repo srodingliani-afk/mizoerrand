@@ -45,6 +45,21 @@ export async function idbGet<T>(key: string): Promise<T | null> {
   }
 }
 
+export async function idbClear(): Promise<void> {
+  if (typeof indexedDB === 'undefined') return;
+  try {
+    const db = await openOfflineDb();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(STORE_NAME, 'readwrite');
+      tx.objectStore(STORE_NAME).clear();
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch {
+    // Non-blocking fallback
+  }
+}
+
 /**
  * Client-side WebP compression for building/turning photos & Before/After proofs (<1.2s mobile upload).
  */

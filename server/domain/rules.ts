@@ -85,7 +85,7 @@ const WALKER_EXCLUSIVE_JOB_TYPES: ReadonlySet<ErrandJobType> = new Set([
 
 /**
  * STRICT VEHICLE & ROLE SEPARATION RULE:
- * - Category A (`walker` - On-Foot Tirhkah): EXCLUSIVE access to <1.5km hyperlocal errands,
+ * - Category A (`walker` - On-Foot Runner): EXCLUSIVE access to <1.5km hyperlocal errands,
  *   steep/long step deliveries (`long_steps_walk`), queue standing, and pickup/truck helper slots.
  *   Vehicles (`bike`, `auto_taxi`, `pickup_truck`) MUST NEVER receive walker-exclusive offers.
  * - Category B (`bike`): Fast light deliveries (`bike_express`) on vehicle-accessible routes.

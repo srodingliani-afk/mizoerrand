@@ -1,9 +1,8 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import Editor from '@monaco-editor/react';
 import {
   Bot,
   Eye,
-  Lock,
   Plus,
   RotateCcw,
   Rocket,
@@ -13,6 +12,8 @@ import {
 import type { AppRemoteConfig, SystemPlugin } from '../shared/types';
 
 interface DevStudioViewProps {
+  adminToken: string;
+  onAuthExpired: () => void;
   onLiveUpdated: () => Promise<void>;
 }
 
@@ -29,11 +30,11 @@ interface ArchitectMessage {
   tools?: Array<{ name: string; args: Record<string, unknown> }>;
 }
 
-export const DevStudioView: React.FC<DevStudioViewProps> = ({ onLiveUpdated }) => {
-  const [pin, setPin] = useState('');
-  const [authToken, setAuthToken] = useState<string | null>(null);
-  const [authError, setAuthError] = useState<string | null>(null);
-
+export const DevStudioView: React.FC<DevStudioViewProps> = ({
+  adminToken,
+  onAuthExpired,
+  onLiveUpdated,
+}) => {
   const [plugins, setPlugins] = useState<SystemPlugin[]>([]);
   const [selectedPluginId, setSelectedPluginId] = useState<string>('__remote_config__');
   const [editorValue, setEditorValue] = useState<string>('');
@@ -56,38 +57,36 @@ export const DevStudioView: React.FC<DevStudioViewProps> = ({ onLiveUpdated }) =
     },
   ]);
 
-  const loadWorkspace = async (token: string) => {
-    const res = await fetch('/api/dev-studio/workspace', {
-      headers: { 'x-dev-studio-token': token },
-    });
-    if (!res.ok) return;
-    const data = await res.json();
-    setPlugins(data.plugins || []);
-    setRemoteConfig(data.remoteConfig);
-    setSandboxConfig(data.sandboxConfig);
-    setSnapshots(data.snapshots || []);
+  const loadWorkspace = useCallback(async () => {
+    try {
+      const res = await fetch('/api/dev-studio/workspace', {
+        headers: { Authorization: `Bearer ${adminToken}` },
+      });
+      if (res.status === 401) {
+        onAuthExpired();
+        return;
+      }
+      if (!res.ok) {
+        setStatusMsg('Could not load Dev Studio workspace.');
+        return;
+      }
+      const data = await res.json();
+      setPlugins(data.plugins || []);
+      setRemoteConfig(data.remoteConfig);
+      setSandboxConfig(data.sandboxConfig);
+      setSnapshots(data.snapshots || []);
 
-    if (selectedPluginId === '__remote_config__' && data.remoteConfig) {
-      setEditorValue(JSON.stringify(data.sandboxConfig || data.remoteConfig, null, 2));
+      if (selectedPluginId === '__remote_config__' && data.remoteConfig) {
+        setEditorValue(JSON.stringify(data.sandboxConfig || data.remoteConfig, null, 2));
+      }
+    } catch {
+      setStatusMsg('Network error loading Dev Studio workspace.');
     }
-  };
+  }, [adminToken, onAuthExpired, selectedPluginId]);
 
-  const handleUnlock2FA = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setAuthError(null);
-    const res = await fetch('/api/dev-studio/verify-2fa', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pin }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      setAuthError(data.error || '2FA verification failed');
-      return;
-    }
-    setAuthToken(data.token);
-    await loadWorkspace(data.token);
-  };
+  useEffect(() => {
+    void loadWorkspace();
+  }, [loadWorkspace]);
 
   const handleSelectTarget = (id: string) => {
     setSelectedPluginId(id);
@@ -100,7 +99,6 @@ export const DevStudioView: React.FC<DevStudioViewProps> = ({ onLiveUpdated }) =
   };
 
   const handleSaveEditorToSandbox = async () => {
-    if (!authToken) return;
     if (selectedPluginId === '__remote_config__') {
       try {
         const parsed = JSON.parse(editorValue) as Partial<AppRemoteConfig>;
@@ -108,13 +106,19 @@ export const DevStudioView: React.FC<DevStudioViewProps> = ({ onLiveUpdated }) =
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'x-dev-studio-token': authToken,
+            Authorization: `Bearer ${adminToken}`,
           },
           body: JSON.stringify(parsed),
         });
+        if (res.status === 401) {
+          onAuthExpired();
+          return;
+        }
         if (res.ok) {
           setStatusMsg('Staged app_remote_config into Sandbox Preview.');
-          await loadWorkspace(authToken);
+          await loadWorkspace();
+        } else {
+          setStatusMsg('Failed to stage sandbox config.');
         }
       } catch {
         setStatusMsg('Invalid JSON syntax in app_remote_config editor.');
@@ -124,112 +128,166 @@ export const DevStudioView: React.FC<DevStudioViewProps> = ({ onLiveUpdated }) =
 
     const found = plugins.find((p) => p.id === selectedPluginId);
     if (!found) return;
-    const res = await fetch('/api/dev-studio/plugins', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-dev-studio-token': authToken,
-      },
-      body: JSON.stringify({ id: found.id, code: editorValue }),
-    });
-    if (res.ok) {
-      setStatusMsg(`Saved plugin code for ${found.key}.`);
-      await loadWorkspace(authToken);
-      await onLiveUpdated();
+    try {
+      const res = await fetch('/api/dev-studio/plugins', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${adminToken}`,
+        },
+        body: JSON.stringify({ id: found.id, code: editorValue }),
+      });
+      if (res.status === 401) {
+        onAuthExpired();
+        return;
+      }
+      if (res.ok) {
+        setStatusMsg(`Saved plugin code for ${found.key}.`);
+        await loadWorkspace();
+        await onLiveUpdated();
+      } else {
+        setStatusMsg('Failed to save plugin code.');
+      }
+    } catch {
+      setStatusMsg('Network error saving plugin.');
     }
   };
 
   const handleTogglePlugin = async (plugin: SystemPlugin) => {
-    if (!authToken) return;
-    await fetch('/api/dev-studio/plugins', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-dev-studio-token': authToken,
-      },
-      body: JSON.stringify({ id: plugin.id, enabled: !plugin.enabled }),
-    });
-    setStatusMsg(`Plugin ${plugin.key} ${!plugin.enabled ? 'enabled' : 'disabled'}.`);
-    await loadWorkspace(authToken);
-    await onLiveUpdated();
+    try {
+      const res = await fetch('/api/dev-studio/plugins', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${adminToken}`,
+        },
+        body: JSON.stringify({ id: plugin.id, enabled: !plugin.enabled }),
+      });
+      if (res.status === 401) {
+        onAuthExpired();
+        return;
+      }
+      if (res.ok) {
+        setStatusMsg(`Plugin ${plugin.key} ${!plugin.enabled ? 'enabled' : 'disabled'}.`);
+        await loadWorkspace();
+        await onLiveUpdated();
+      }
+    } catch {
+      setStatusMsg('Network error toggling plugin.');
+    }
   };
 
   const handleCreatePlugin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!authToken || !newPluginKey.trim() || !newPluginName.trim()) return;
-    const res = await fetch('/api/dev-studio/plugins', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-dev-studio-token': authToken,
-      },
-      body: JSON.stringify({
-        key: newPluginKey.trim(),
-        name: newPluginName.trim(),
-        module: 'remote-config-sdui',
-        code: `// Custom plugin: ${newPluginName.trim()}\nexport function execute(ctx) {\n  return { ok: true, region: ctx.region };\n}`,
-      }),
-    });
-    if (res.ok) {
-      const data = await res.json();
-      setNewPluginKey('');
-      setNewPluginName('');
-      await loadWorkspace(authToken);
-      setSelectedPluginId(data.plugin.id);
-      setEditorValue(data.plugin.code);
-      setStatusMsg(`Created new plugin ${data.plugin.key}.`);
+    if (!newPluginKey.trim() || !newPluginName.trim()) return;
+    try {
+      const res = await fetch('/api/dev-studio/plugins', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${adminToken}`,
+        },
+        body: JSON.stringify({
+          key: newPluginKey.trim(),
+          name: newPluginName.trim(),
+          module: 'remote-config-sdui',
+          code: `// Custom plugin: ${newPluginName.trim()}\nexport function execute(ctx) {\n  return { ok: true, region: ctx.region };\n}`,
+        }),
+      });
+      if (res.status === 401) {
+        onAuthExpired();
+        return;
+      }
+      if (res.ok) {
+        const data = await res.json();
+        setNewPluginKey('');
+        setNewPluginName('');
+        await loadWorkspace();
+        setSelectedPluginId(data.plugin.id);
+        setEditorValue(data.plugin.code);
+        setStatusMsg(`Created new plugin ${data.plugin.key}.`);
+      } else {
+        setStatusMsg('Could not create plugin.');
+      }
+    } catch {
+      setStatusMsg('Network error creating plugin.');
     }
   };
 
   const handleDeletePlugin = async (id: string) => {
-    if (!authToken) return;
-    await fetch(`/api/dev-studio/plugins/${id}`, {
-      method: 'DELETE',
-      headers: { 'x-dev-studio-token': authToken },
-    });
-    if (selectedPluginId === id) {
-      handleSelectTarget('__remote_config__');
+    try {
+      const res = await fetch(`/api/dev-studio/plugins/${id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${adminToken}` },
+      });
+      if (res.status === 401) {
+        onAuthExpired();
+        return;
+      }
+      if (selectedPluginId === id) {
+        handleSelectTarget('__remote_config__');
+      }
+      await loadWorkspace();
+    } catch {
+      setStatusMsg('Network error deleting plugin.');
     }
-    await loadWorkspace(authToken);
   };
 
   const handlePublishLive = async () => {
-    if (!authToken) return;
-    const res = await fetch('/api/dev-studio/publish', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-dev-studio-token': authToken,
-      },
-      body: JSON.stringify({ label: `Live Publish ${new Date().toLocaleTimeString()}` }),
-    });
-    if (res.ok) {
-      setStatusMsg('Published live to all Customer & Partner PWAs with zero app reinstall!');
-      await loadWorkspace(authToken);
-      await onLiveUpdated();
+    try {
+      const res = await fetch('/api/dev-studio/publish', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${adminToken}`,
+        },
+        body: JSON.stringify({ label: `Live Publish ${new Date().toLocaleTimeString()}` }),
+      });
+      if (res.status === 401) {
+        onAuthExpired();
+        return;
+      }
+      if (res.ok) {
+        setStatusMsg('Published live to all Customer & Partner PWAs with zero app reinstall!');
+        await loadWorkspace();
+        await onLiveUpdated();
+      } else {
+        setStatusMsg('Failed to publish live.');
+      }
+    } catch {
+      setStatusMsg('Network error publishing live.');
     }
   };
 
   const handleRollback = async (snapshotId?: string) => {
-    if (!authToken) return;
-    const res = await fetch('/api/dev-studio/rollback', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-dev-studio-token': authToken,
-      },
-      body: JSON.stringify({ snapshotId }),
-    });
-    if (res.ok) {
-      setStatusMsg('1-Click Snapshot Rollback completed and pushed live.');
-      await loadWorkspace(authToken);
-      await onLiveUpdated();
+    try {
+      const res = await fetch('/api/dev-studio/rollback', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${adminToken}`,
+        },
+        body: JSON.stringify({ snapshotId }),
+      });
+      if (res.status === 401) {
+        onAuthExpired();
+        return;
+      }
+      if (res.ok) {
+        setStatusMsg('1-Click Snapshot Rollback completed and pushed live.');
+        await loadWorkspace();
+        await onLiveUpdated();
+      } else {
+        setStatusMsg('Rollback failed.');
+      }
+    } catch {
+      setStatusMsg('Network error during rollback.');
     }
   };
 
   const handleSendAiPrompt = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!authToken || !aiPrompt.trim()) return;
+    if (!aiPrompt.trim()) return;
     const promptText = aiPrompt.trim();
     setMessages((prev) => [...prev, { role: 'user', text: promptText }]);
     setAiPrompt('');
@@ -239,10 +297,14 @@ export const DevStudioView: React.FC<DevStudioViewProps> = ({ onLiveUpdated }) =
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-dev-studio-token': authToken,
+          Authorization: `Bearer ${adminToken}`,
         },
         body: JSON.stringify({ prompt: promptText }),
       });
+      if (res.status === 401) {
+        onAuthExpired();
+        return;
+      }
       const data = await res.json();
       if (!res.ok) {
         setMessages((prev) => [
@@ -258,7 +320,7 @@ export const DevStudioView: React.FC<DevStudioViewProps> = ({ onLiveUpdated }) =
             tools: data.toolInvocations,
           },
         ]);
-        await loadWorkspace(authToken);
+        await loadWorkspace();
         await onLiveUpdated();
       }
     } catch {
@@ -270,45 +332,6 @@ export const DevStudioView: React.FC<DevStudioViewProps> = ({ onLiveUpdated }) =
       setAiLoading(false);
     }
   };
-
-  if (!authToken) {
-    return (
-      <div className="mx-auto max-w-md py-12">
-        <form
-          onSubmit={handleUnlock2FA}
-          className="rounded-2xl border border-slate-800 bg-slate-900 p-6 text-slate-100 space-y-4 shadow-xl"
-        >
-          <div className="flex items-center gap-2 text-teal-400">
-            <Lock className="w-5 h-5" />
-            <h1 className="text-lg font-bold text-white">Super-Admin 2FA Required</h1>
-          </div>
-          <p className="text-xs text-slate-300 leading-relaxed">
-            <code>/admin/dev-studio</code> embeds the live Monaco Editor, SDUI plugin compiler, and AI Software Engineer. Enter your 6-digit Super-Admin 2FA code to unlock.
-          </p>
-          <div>
-            <label htmlFor="dev-2fa-pin" className="block text-xs font-medium text-slate-300 mb-1">
-              2FA Authenticator Code (Default demo PIN: 482910)
-            </label>
-            <input
-              id="dev-2fa-pin"
-              type="password"
-              value={pin}
-              onChange={(e) => setPin(e.target.value)}
-              placeholder="482910"
-              className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm font-mono text-white focus:border-teal-500 focus:outline-none"
-            />
-          </div>
-          {authError && <p className="text-xs text-red-400">{authError}</p>}
-          <button
-            type="submit"
-            className="w-full min-h-[44px] rounded-xl bg-teal-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-500"
-          >
-            Verify 2FA &amp; Enter Dev Studio
-          </button>
-        </form>
-      </div>
-    );
-  }
 
   return (
     <div className="rounded-2xl bg-slate-950 text-slate-100 border border-slate-800 overflow-hidden mb-16 md:mb-4">
