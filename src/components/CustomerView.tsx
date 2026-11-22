@@ -17,6 +17,7 @@ import {
   Footprints,
   Fuel,
   KeyRound,
+  Mail,
   Map as MapIcon,
   MapPin,
   MessageCircle,
@@ -98,6 +99,7 @@ import { LiveTripTrackerBar } from './LiveTripTrackerBar';
 import { VoiceNoteRecorder, type VoiceNoteValue } from './VoiceNoteRecorder';
 import { CameraCaptureModal } from './CameraCaptureModal';
 import { MapPinPickerWindow, type PinPickerMode } from './MapPinPickerWindow';
+import { WorkspaceCommsWindow } from './WorkspaceCommsWindow';
 
 const LazyMizoramMap = lazy(() =>
   import('./MizoramMap').then((m) => ({ default: m.MizoramMap }))
@@ -222,6 +224,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
   const [sosTicketsLayerOpen, setSosTicketsLayerOpen] = useState(false);
   const [walletLayerOpen, setWalletLayerOpen] = useState(false);
   const [sumoLayerOpen, setSumoLayerOpen] = useState(false);
+  const [workspaceLayerOpen, setWorkspaceLayerOpen] = useState(false);
 
   // Marketplace Layered Popups (Layer 1: Product Detail / Orders -> Layer 2: Shop Chat)
   const [selectedProduct, setSelectedProduct] = useState<MarketplaceProduct | null>(null);
@@ -286,7 +289,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
     'Gate beside concrete steps, blue railing on right.'
   );
   const [errandVoiceNote, setErrandVoiceNote] = useState<VoiceNoteValue | null>(null);
-  const { user, effectiveRole } = useFirebaseAuth();
+  const { user, effectiveRole, workspaceConnected } = useFirebaseAuth();
   const [liveFirestoreRunnersCount, setLiveFirestoreRunnersCount] = useState<number | null>(null);
   const [liveFirestoreOrdersCount, setLiveFirestoreOrdersCount] = useState<number | null>(null);
   const [liveFirestoreSosCount, setLiveFirestoreSosCount] = useState<number | null>(null);
@@ -1829,6 +1832,42 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
                     </span>
                   )}
                   <ChevronRight className="w-4 h-4 text-red-400" />
+                </div>
+              </button>
+
+              {/* Row 4: Google Workspace Comms Hub (Gmail · Google Chat · Google Meet) */}
+              <button
+                type="button"
+                onClick={() => {
+                  triggerHaptic('light');
+                  setWorkspaceLayerOpen(true);
+                }}
+                className="w-full min-h-[68px] px-4 py-3.5 flex items-center justify-between gap-3 text-left hover:bg-slate-50/80 dark:hover:bg-slate-800/60 active:bg-slate-100/70 transition-colors"
+              >
+                <div className="flex items-center gap-3.5 min-w-0">
+                  <div className="w-10 h-10 rounded-2xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-400 flex items-center justify-center shrink-0">
+                    <Mail className="w-5 h-5" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-sm font-bold text-slate-900 dark:text-slate-100 truncate">
+                      {lang === 'miz' ? 'Gmail, Chat & Google Meet' : 'Gmail, Chat & Meet Hub'}
+                    </p>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5">
+                      {lang === 'miz'
+                        ? 'Order receipt thawn, Chat & Awmpui Video Call'
+                        : 'Receipts via Gmail · Support Chat · Meet Video'}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <span
+                    className={`text-[11px] font-bold ${
+                      workspaceConnected ? 'text-emerald-700 dark:text-emerald-400' : 'text-slate-400'
+                    }`}
+                  >
+                    {workspaceConnected ? 'Live' : 'Connect'}
+                  </span>
+                  <ChevronRight className="w-4 h-4 text-slate-400" />
                 </div>
               </button>
             </section>
@@ -4076,6 +4115,16 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
         plusPassActive={customerWallet.plusPassActive}
         parcels={sumoParcels}
         onBooked={onRefresh}
+      />
+
+      {/* LAYER 1: GOOGLE WORKSPACE COMMS HUB (GMAIL, CHAT & MEET) */}
+      <WorkspaceCommsWindow
+        open={workspaceLayerOpen}
+        onClose={() => setWorkspaceLayerOpen(false)}
+        lang={lang}
+        selectedDistrict={selectedDistrict}
+        latestErrand={latestErrand}
+        latestOrder={orders[0] || null}
       />
 
       {/* LAYER 2: COMPREHENSIVE FULL-DETAIL INSPECTION WINDOWS */}

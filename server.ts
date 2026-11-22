@@ -293,6 +293,11 @@ async function startServer() {
       storage: db.getStorageInfo(),
       database: databaseHealth,
       driveStorage,
+      workspaceComms: {
+        services: ['gmail', 'chat', 'meet', 'drive'],
+        tokenActive: Boolean(driveToken),
+        oauthConfigured: true,
+      },
       ledgerIntegrity: verifyLedgerIntegrity(state),
       mapsPlatform: {
         routesMatrixReady: true,

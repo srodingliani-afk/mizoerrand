@@ -306,7 +306,9 @@ devStudioAiRouter.put('/integrations', requireAdminAuth, (req, res) => {
       ? { requireServerStaffVerificationForUpdates: patch.requireServerStaffVerificationForUpdates }
       : {}),
     ...(patch.videoProvider &&
-    ['jitsi_webrtc', 'daily_co', 'livekit_cloud', 'agora_rtc'].includes(patch.videoProvider)
+    ['jitsi_webrtc', 'google_meet_v2', 'daily_co', 'livekit_cloud', 'agora_rtc'].includes(
+      patch.videoProvider
+    )
       ? { videoProvider: patch.videoProvider }
       : {}),
     ...(typeof patch.videoServerDomain === 'string' && patch.videoServerDomain.trim()

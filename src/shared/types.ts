@@ -433,7 +433,7 @@ export interface KycVideoInterviewSession {
     | 'completed_passed'
     | 'completed_failed'
     | 'waived_by_staff';
-  provider: 'jitsi_webrtc' | 'daily_co' | 'livekit_cloud' | 'agora_rtc';
+  provider: 'jitsi_webrtc' | 'google_meet_v2' | 'daily_co' | 'livekit_cloud' | 'agora_rtc';
   roomName: string;
   roomUrl: string;
   scheduledAt?: string;
@@ -450,7 +450,7 @@ export interface SystemIntegrationConfig {
   requireFull12DigitAadhaarScan: boolean;
   aiOcrMinConfidence: number;
   requireServerStaffVerificationForUpdates: boolean;
-  videoProvider: 'jitsi_webrtc' | 'daily_co' | 'livekit_cloud' | 'agora_rtc';
+  videoProvider: 'jitsi_webrtc' | 'google_meet_v2' | 'daily_co' | 'livekit_cloud' | 'agora_rtc';
   videoServerDomain: string;
   videoApiKey: string;
   videoApiSecret: string;

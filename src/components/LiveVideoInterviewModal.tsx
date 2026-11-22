@@ -14,6 +14,8 @@ import {
 import type { KycQueueItem, KycVideoInterviewSession, Language } from '../shared/types';
 import { LayerWindow } from './LayerWindow';
 import { triggerHaptic } from '../lib/nativeBridge';
+import { getGoogleWorkspaceAccessToken } from '../lib/firebase';
+import { createGoogleMeetSpace } from '../lib/workspaceComms';
 
 interface LiveVideoInterviewModalProps {
   open: boolean;
@@ -132,7 +134,9 @@ export const LiveVideoInterviewModal: React.FC<LiveVideoInterviewModalProps> = (
   };
 
   const handleStaffDecision = async (
-    action: 'open_live_room' | 'complete_passed' | 'complete_failed' | 'waive'
+    action: 'open_live_room' | 'complete_passed' | 'complete_failed' | 'waive',
+    customRoomUrl?: string,
+    customRoomName?: string
   ) => {
     if (!kycItem) return;
     setBusy(true);
@@ -149,6 +153,8 @@ export const LiveVideoInterviewModal: React.FC<LiveVideoInterviewModalProps> = (
           interviewerName,
           interviewScore: score,
           interviewerNotes: notes,
+          roomUrl: customRoomUrl,
+          roomName: customRoomName,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -164,9 +170,42 @@ export const LiveVideoInterviewModal: React.FC<LiveVideoInterviewModalProps> = (
             ? 'Live Video Interview waived by Server Staff discretion.'
             : action === 'complete_failed'
               ? 'Live Video Interview marked FAILED.'
-              : 'Live WebRTC Interview Room opened and applicant notified!'
+              : customRoomUrl
+                ? `Official Google Meet Room created & synced (${customRoomUrl})!`
+                : 'Live WebRTC Interview Room opened and applicant notified!'
       );
       await onUpdated?.();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleCreateOfficialGoogleMeet = async () => {
+    const token = getGoogleWorkspaceAccessToken();
+    if (!token) {
+      setStatusNotice(
+        'Sign in with Google Workspace (in Profile or Comms Hub) to provision a Google Meet API v2 room, or use the built-in embedded WebRTC room below.'
+      );
+      return;
+    }
+    setBusy(true);
+    setStatusNotice(null);
+    try {
+      const space = await createGoogleMeetSpace(token, 'OPEN');
+      if (space.meetingUri) {
+        window.open(space.meetingUri, '_blank', 'noopener,noreferrer');
+        if (isServerStaff) {
+          await handleStaffDecision(
+            'open_live_room',
+            space.meetingUri,
+            space.meetingCode || space.name
+          );
+        } else {
+          setStatusNotice(`Google Meet room launched: ${space.meetingUri}`);
+        }
+      }
+    } catch (err) {
+      setStatusNotice(err instanceof Error ? err.message : 'Could not create Google Meet space.');
     } finally {
       setBusy(false);
     }
@@ -220,6 +259,14 @@ export const LiveVideoInterviewModal: React.FC<LiveVideoInterviewModalProps> = (
                 </span>
               </div>
               <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void handleCreateOfficialGoogleMeet()}
+                  className="rounded-lg bg-indigo-600 hover:bg-indigo-500 px-2.5 py-1 text-[11px] font-bold text-white"
+                >
+                  Google Meet API v2
+                </button>
                 <button
                   type="button"
                   onClick={() => setShowEmbeddedRoom((p) => !p)}

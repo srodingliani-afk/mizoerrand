@@ -452,12 +452,16 @@ authKycRouter.post('/video-interview/:id', requireAdminAuth, (req, res) => {
     interviewerName,
     interviewScore,
     interviewerNotes,
+    roomUrl,
+    roomName,
   } = (req.body || {}) as {
     action?: 'require_or_schedule' | 'open_live_room' | 'complete_passed' | 'complete_failed' | 'waive';
     scheduledAt?: string;
     interviewerName?: string;
     interviewScore?: number;
     interviewerNotes?: string;
+    roomUrl?: string;
+    roomName?: string;
   };
 
   const state = db.get();
@@ -495,6 +499,15 @@ authKycRouter.post('/video-interview/:id', requireAdminAuth, (req, res) => {
 
   if (interviewerName) existingSession.interviewerName = interviewerName.trim().slice(0, 80);
   if (interviewerNotes) existingSession.interviewerNotes = interviewerNotes.trim().slice(0, 240);
+  if (typeof roomUrl === 'string' && roomUrl.startsWith('https://')) {
+    existingSession.roomUrl = roomUrl.trim();
+    if (roomUrl.includes('meet.google.com')) {
+      existingSession.provider = 'google_meet_v2';
+    }
+  }
+  if (typeof roomName === 'string' && roomName.trim()) {
+    existingSession.roomName = roomName.trim().slice(0, 80);
+  }
   existingSession.updatedAt = now;
   item.videoInterview = existingSession;
 

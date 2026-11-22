@@ -1664,6 +1664,7 @@ export const MasterSystemControlPanel: React.FC<MasterSystemControlPanelProps> =
                     className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold"
                   >
                     <option value="jitsi_webrtc">Jitsi Meet WebRTC (Zero-Key Out-of-Box)</option>
+                    <option value="google_meet_v2">Google Meet API v2 (Workspace Comms Hub)</option>
                     <option value="daily_co">Daily.co WebRTC Cloud</option>
                     <option value="livekit_cloud">LiveKit Cloud SFU</option>
                     <option value="agora_rtc">Agora SD-RTN</option>

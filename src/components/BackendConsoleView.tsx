@@ -59,6 +59,11 @@ interface SystemStatusPayload {
     }>;
     error?: string;
   };
+  workspaceComms?: {
+    services: string[];
+    tokenActive: boolean;
+    oauthConfigured: boolean;
+  };
   ledgerIntegrity?: {
     totalJournals: number;
     balancedJournals: number;
@@ -358,12 +363,12 @@ export const BackendConsoleView: React.FC<BackendConsoleViewProps> = ({
               <div className="flex items-center justify-between gap-2">
                 <h2 className="text-sm font-bold text-slate-900 flex items-center gap-2">
                   <HardDrive className="w-4 h-4 text-teal-700" />
-                  Google Drive Media Folders
+                  Google Workspace &amp; Drive Media
                 </h2>
                 <span className="text-[11px] font-mono text-slate-600">
                   {statusData.driveStorage.tokenActive
-                    ? `Drive API v3 · ${statusData.driveStorage.latencyMs ?? 0}ms`
-                    : 'Sign in w/ Google to activate Drive'}
+                    ? `Gmail · Chat · Meet · Drive (${statusData.driveStorage.latencyMs ?? 0}ms)`
+                    : 'Sign in w/ Google to activate Workspace'}
                 </span>
               </div>
               <div className="space-y-1.5">
