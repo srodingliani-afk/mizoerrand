@@ -9,6 +9,7 @@ coverage/
 .data/
 .gmp_cache/
 .aistudio/
+.playwright-cli/
 
 # Environment secrets
 .env*

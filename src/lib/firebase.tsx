@@ -23,19 +23,23 @@ import type { MizoramDistrict, UserRole } from '../shared/types';
 
 // Strict module-memory storage for tokens (never persisted in localStorage/sessionStorage)
 let inMemoryFirebaseIdToken: string | null = null;
-let inMemoryGoogleDriveAccessToken: string | null = null;
+let inMemoryGoogleWorkspaceAccessToken: string | null = null;
 
 export function getFirebaseIdToken(): string | null {
   return inMemoryFirebaseIdToken;
 }
 
+export function getGoogleWorkspaceAccessToken(): string | null {
+  return inMemoryGoogleWorkspaceAccessToken;
+}
+
 export function getGoogleDriveAccessToken(): string | null {
-  return inMemoryGoogleDriveAccessToken;
+  return inMemoryGoogleWorkspaceAccessToken;
 }
 
 export function clearInMemoryAuthTokens(): void {
   inMemoryFirebaseIdToken = null;
-  inMemoryGoogleDriveAccessToken = null;
+  inMemoryGoogleWorkspaceAccessToken = null;
 }
 
 const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
@@ -169,6 +173,7 @@ interface FirebaseAuthContextValue {
   profile: UserPublicProfile | null;
   effectiveRole: UserRole;
   driveConnected: boolean;
+  workspaceConnected: boolean;
   firestoreOnline: boolean;
   loading: boolean;
   authError: string | null;
@@ -181,9 +186,28 @@ interface FirebaseAuthContextValue {
 
 const FirebaseAuthContext = createContext<FirebaseAuthContextValue | null>(null);
 
-const GOOGLE_DRIVE_SCOPES = [
+const GOOGLE_WORKSPACE_SCOPES = [
+  // Google Drive (Voice notes, Receipts, KYC)
   'https://www.googleapis.com/auth/drive.file',
   'https://www.googleapis.com/auth/drive.metadata.readonly',
+  // Gmail
+  'https://www.googleapis.com/auth/gmail.readonly',
+  'https://www.googleapis.com/auth/gmail.send',
+  'https://www.googleapis.com/auth/gmail.compose',
+  'https://www.googleapis.com/auth/gmail.modify',
+  'https://www.googleapis.com/auth/gmail.labels',
+  // Google Chat
+  'https://www.googleapis.com/auth/chat.spaces.readonly',
+  'https://www.googleapis.com/auth/chat.spaces.create',
+  'https://www.googleapis.com/auth/chat.spaces',
+  'https://www.googleapis.com/auth/chat.messages.readonly',
+  'https://www.googleapis.com/auth/chat.messages.create',
+  'https://www.googleapis.com/auth/chat.messages',
+  'https://www.googleapis.com/auth/chat.memberships.readonly',
+  // Google Meet
+  'https://www.googleapis.com/auth/meetings.space.created',
+  'https://www.googleapis.com/auth/meetings.space.readonly',
+  'https://www.googleapis.com/auth/meetings.space.settings',
 ];
 
 export const FirebaseProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -306,13 +330,13 @@ export const FirebaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       try {
         const provider = new GoogleAuthProvider();
         provider.setCustomParameters({ prompt: 'select_account' });
-        for (const scope of GOOGLE_DRIVE_SCOPES) {
+        for (const scope of GOOGLE_WORKSPACE_SCOPES) {
           provider.addScope(scope);
         }
         const result = await signInWithPopup(firebaseAuth, provider);
         const credential = GoogleAuthProvider.credentialFromResult(result);
-        inMemoryGoogleDriveAccessToken = credential?.accessToken || null;
-        setDriveConnected(Boolean(inMemoryGoogleDriveAccessToken));
+        inMemoryGoogleWorkspaceAccessToken = credential?.accessToken || null;
+        setDriveConnected(Boolean(inMemoryGoogleWorkspaceAccessToken));
         inMemoryFirebaseIdToken = await result.user.getIdToken();
         await ensureUserProfile(result.user, activeDistrict);
       } catch (err) {
@@ -327,7 +351,7 @@ export const FirebaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   );
 
   const disconnectDriveToken = useCallback(() => {
-    inMemoryGoogleDriveAccessToken = null;
+    inMemoryGoogleWorkspaceAccessToken = null;
     setDriveConnected(false);
   }, []);
 
@@ -371,6 +395,7 @@ export const FirebaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         profile,
         effectiveRole,
         driveConnected,
+        workspaceConnected: driveConnected,
         firestoreOnline,
         loading,
         authError,

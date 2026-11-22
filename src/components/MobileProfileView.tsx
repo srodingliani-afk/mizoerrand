@@ -3,8 +3,8 @@ import {
   ChevronRight,
   Globe,
   HardDrive,
-  LogIn,
   LogOut,
+  Mail,
   MapPin,
   Phone,
   Settings,
@@ -28,6 +28,8 @@ import { StandaloneInstallCard } from '../lib/pwa';
 import { triggerHaptic } from '../lib/nativeBridge';
 import { useFirebaseAuth } from '../lib/firebase';
 import type { UserAppSettings } from '../lib/userSettings';
+import { GoogleSignInButton } from './GoogleSignInButton';
+import { WorkspaceCommsWindow } from './WorkspaceCommsWindow';
 
 interface MobileProfileViewProps {
   lang: Language;
@@ -59,6 +61,7 @@ export const MobileProfileView: React.FC<MobileProfileViewProps> = ({
     profile,
     effectiveRole,
     driveConnected,
+    workspaceConnected,
     firestoreOnline,
     loading: authLoading,
     authError,
@@ -69,6 +72,7 @@ export const MobileProfileView: React.FC<MobileProfileViewProps> = ({
   } = useFirebaseAuth();
   const [confirmSignOut, setConfirmSignOut] = useState(false);
   const [showPhoneInfo, setShowPhoneInfo] = useState(false);
+  const [workspaceOpen, setWorkspaceOpen] = useState(false);
 
   const workspaces: Array<{
     mode: 'customer' | 'partner' | 'staff' | 'merchant' | 'technician' | 'apply';
@@ -182,19 +186,15 @@ export const MobileProfileView: React.FC<MobileProfileViewProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            {!user ? (
-              <button
-                type="button"
+            {!user || !workspaceConnected ? (
+              <GoogleSignInButton
                 disabled={authLoading}
+                label={user ? 'Reconnect Google Workspace' : 'Sign in with Google'}
                 onClick={() => {
                   triggerHaptic('medium');
                   void signInWithGoogle(selectedDistrict);
                 }}
-                className="min-h-[42px] inline-flex items-center gap-2 rounded-xl bg-white px-4 py-2 text-xs font-bold text-emerald-950 hover:bg-emerald-50 active:scale-[0.98] transition-all"
-              >
-                <LogIn className="w-4 h-4 text-emerald-800" />
-                {lang === 'miz' ? 'Google & Drive-in Lut Rawh' : 'Sign in with Google & Drive'}
-              </button>
+              />
             ) : (
               <div className="flex flex-wrap items-center gap-2">
                 <span
@@ -203,7 +203,7 @@ export const MobileProfileView: React.FC<MobileProfileViewProps> = ({
                   }`}
                 >
                   <HardDrive className="w-3.5 h-3.5" />
-                  {driveConnected ? 'Google Drive Synced' : 'Drive Local Fallback'}
+                  {driveConnected ? 'Gmail · Chat · Meet · Drive Synced' : 'Local Fallback'}
                 </span>
 
                 {!confirmSignOut ? (
@@ -360,6 +360,32 @@ export const MobileProfileView: React.FC<MobileProfileViewProps> = ({
               type="button"
               onClick={() => {
                 triggerHaptic('light');
+                setWorkspaceOpen(true);
+              }}
+              className="w-full p-4 min-h-[68px] flex items-center justify-between gap-3 text-left hover:bg-slate-50 dark:hover:bg-slate-800/70 active:bg-slate-100 transition-colors"
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-10 h-10 rounded-2xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-400 flex items-center justify-center shrink-0">
+                  <Mail className="w-5 h-5" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                    {lang === 'miz' ? 'Gmail, Chat & Google Meet' : 'Google Workspace Comms'}
+                  </p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5">
+                    {workspaceConnected
+                      ? 'Gmail, Chat & Meet Connected'
+                      : 'Sign in with Google to connect Gmail, Chat & Meet'}
+                  </p>
+                </div>
+              </div>
+              <ChevronRight className="w-4 h-4 text-slate-400 shrink-0" />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                triggerHaptic('light');
                 onOpenSettings();
               }}
               className="w-full p-4 min-h-[68px] flex items-center justify-between gap-3 text-left hover:bg-slate-50 dark:hover:bg-slate-800/70 active:bg-slate-100 transition-colors"
@@ -445,6 +471,13 @@ export const MobileProfileView: React.FC<MobileProfileViewProps> = ({
           </div>
         </div>
       </div>
+
+      <WorkspaceCommsWindow
+        open={workspaceOpen}
+        onClose={() => setWorkspaceOpen(false)}
+        lang={lang}
+        selectedDistrict={selectedDistrict}
+      />
     </div>
   );
 };
