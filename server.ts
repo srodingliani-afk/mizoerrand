@@ -294,7 +294,7 @@ async function startServer() {
       database: databaseHealth,
       driveStorage,
       workspaceComms: {
-        services: ['gmail', 'chat', 'meet', 'drive'],
+        services: ['gmail', 'chat', 'meet', 'sheets', 'classroom', 'drive'],
         tokenActive: Boolean(driveToken),
         oauthConfigured: true,
       },

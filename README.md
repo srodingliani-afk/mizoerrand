@@ -19,8 +19,8 @@
   - Vetted staff directory, digital contracts, attendance check-in/out, leave management, bank payroll disbursement, and Worker SOS.
 - **24×7 Rapid Emergency SOS**
   - 12 emergency categories across medical, utility, and monsoon/roadside incidents with 2-tap confirmation guard, sliding-window rate limiting (`429`), and 60-second `node-cron` SLA monitoring.
-- **Google Workspace Comms Hub (Gmail · Google Chat · Google Meet)**
-  - Customer-initiated OAuth connection to read/send **Gmail** order receipts, message **Google Chat** dispatch spaces (requires Business/Enterprise Google Workspace + Chat App config in Cloud Console), and launch **Google Meet** rooms for live *Awmpui* interviews or *En Hmasak* gate inspections — with explicit confirmation dialogs before every mutating action.
+- **Google Workspace Hub (Gmail · Google Chat · Google Meet · Google Sheets · Google Classroom)**
+  - Customer-initiated OAuth connection to read/send **Gmail** order receipts, message **Google Chat** dispatch spaces (requires Business/Enterprise Google Workspace + Chat App config in Cloud Console), launch **Google Meet** rooms for live *Awmpui* interviews or *En Hmasak* gate inspections, export district order ledgers to **Google Sheets** (with dynamic tab lookup), and manage **Google Classroom** campus courses/announcements/assignments — with explicit confirmation dialogs before every mutating action.
 - **Admin & Backend Web Consoles (`/admin`, `/admin/dev-studio`, `/backend`)**
   - Protected behind 2FA PIN authentication with live Firebase, double-entry ledger integrity, Google Drive folder health, Maps Routes v2 telemetry, SDUI remote config toggles, and SSE real-time dispatch.
 
@@ -33,7 +33,7 @@
 | **Frontend** | React 19, TypeScript, Vite, Tailwind CSS v4, `vite-plugin-pwa`, IndexedDB offline cache, `@vis.gl/react-google-maps` |
 | **Backend API** | Node.js, Express, TypeScript (`server.ts`), modular routers (`server/modules/*`), `zod` validation, `node-cron`, Server-Sent Events |
 | **Auth & Real-Time** | Firebase Authentication (Google Sign-In + RBAC), Cloud Firestore (district-scoped rules in `firestore.rules`) |
-| **Workspace & Media** | Gmail API v1, Google Chat API v1, Google Meet API v2, Google Drive API v3 (`ZoRun/VoiceNotes`, `ZoRun/Receipts`, private `ZoRun/KYC`) with local fallback |
+| **Workspace & Media** | Gmail API v1, Google Chat API v1, Google Meet API v2, Google Sheets API v4, Google Classroom API v1, Google Drive API v3 (`ZoRun/VoiceNotes`, `ZoRun/Receipts`, private `ZoRun/KYC`) with local fallback |
 | **Maps & Routing** | Google Maps Routes API v2 (`computeRouteMatrix`), Geocoding API v4, Places Autocomplete, terrain Haversine fallback |
 | **Accounting & Store** | Balanced Double-Entry Journal engine (`ledgerService.ts`) with 18% GST splits; `StorageAdapter` (Local atomic JSON + optional PostgreSQL `pg` pool) |
 

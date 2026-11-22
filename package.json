@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test": "tsx --test firestore.rules.test.ts server/infrastructure/driveStorage.test.ts server/infrastructure/ledgerService.test.ts server/domain/rules.test.ts server/domain/premiumRules.test.ts server/domain/staffingRules.test.ts src/lib/geolocation.test.ts src/lib/workspaceComms.test.ts"
+    "test": "tsx --test firestore.rules.test.ts server/infrastructure/driveStorage.test.ts server/infrastructure/ledgerService.test.ts server/domain/rules.test.ts server/domain/premiumRules.test.ts server/domain/staffingRules.test.ts src/lib/geolocation.test.ts src/lib/workspaceComms.test.ts src/lib/workspaceSheetsClassroom.test.ts"
   },
   "dependencies": {
     "@firebase/eslint-plugin-security-rules": "^0.0.2",

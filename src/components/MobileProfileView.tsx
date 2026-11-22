@@ -203,7 +203,7 @@ export const MobileProfileView: React.FC<MobileProfileViewProps> = ({
                   }`}
                 >
                   <HardDrive className="w-3.5 h-3.5" />
-                  {driveConnected ? 'Gmail · Chat · Meet · Drive Synced' : 'Local Fallback'}
+                  {driveConnected ? 'Workspace · Sheets · Classroom Synced' : 'Local Fallback'}
                 </span>
 
                 {!confirmSignOut ? (
@@ -370,12 +370,12 @@ export const MobileProfileView: React.FC<MobileProfileViewProps> = ({
                 </div>
                 <div className="min-w-0">
                   <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                    {lang === 'miz' ? 'Gmail, Chat & Google Meet' : 'Google Workspace Comms'}
+                    {lang === 'miz' ? 'Google Workspace Hub' : 'Google Workspace Hub'}
                   </p>
                   <p className="text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5">
                     {workspaceConnected
-                      ? 'Gmail, Chat & Meet Connected'
-                      : 'Sign in with Google to connect Gmail, Chat & Meet'}
+                      ? 'Gmail, Chat, Meet, Sheets & Classroom Connected'
+                      : 'Sign in with Google for Gmail, Sheets, Classroom & Meet'}
                   </p>
                 </div>
               </div>
