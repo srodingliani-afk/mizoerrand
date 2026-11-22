@@ -27,10 +27,11 @@ import { TRANSLATIONS } from '../i18n/translations';
 import { ALL_MIZORAM_DISTRICT_NAMES, MIZORAM_DISTRICTS, getDistrictInfo } from '../data/mizoramDistricts';
 import { MizoramMap } from './MizoramMap';
 import { AdminStaffingConsole } from './AdminStaffingConsole';
+import { MasterSystemControlPanel } from './MasterSystemControlPanel';
 import { triggerHaptic } from '../lib/nativeBridge';
 
 type AdminRole = 'Super Admin' | 'Operations Lead' | 'KYC & HR Officer' | 'Finance & Payroll';
-type AdminTab = 'dispatch' | 'kyc' | 'payroll' | 'disputes';
+type AdminTab = 'dispatch' | 'kyc' | 'payroll' | 'disputes' | 'master_control';
 
 interface AdminDashboardProps {
   lang: Language;
@@ -441,6 +442,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             ['kyc', 'KYC, Vetting & 3-Shift Roster'],
             ['payroll', 'Managed Staffing & Payroll'],
             ['disputes', 'Disputes, Fraud & GST Escrow'],
+            ['master_control', 'Master System Control (Edit All)'],
           ] as const
         ).map(([key, label]) => {
           const allowed = canAccessTab(key);
@@ -741,6 +743,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           payrollRecords={payrollRecords}
           onRefresh={onRefresh}
           onActionStatus={setActionStatus}
+        />
+      )}
+
+      {/* TAB 5: MASTER SYSTEM CONTROL & ENTITY OVERRIDE */}
+      {tab === 'master_control' && (
+        <MasterSystemControlPanel
+          adminToken={adminToken}
+          onAuthExpired={onAuthExpired}
+          onLiveUpdated={onRefresh}
         />
       )}
 

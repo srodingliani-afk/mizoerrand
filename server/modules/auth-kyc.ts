@@ -3,9 +3,10 @@ import { db } from '../infrastructure/store';
 import { createSignedPrivateUrl, verifySignedPrivateToken } from '../infrastructure/signedUrls';
 import { createAdminKycSignedUrl, isValidKycObjectPath } from '../infrastructure/driveStorage';
 import { realtimeHub } from '../infrastructure/realtimeHub';
+import { liveGpsCache } from '../infrastructure/redisCache';
 import { requireAdminAuth } from '../infrastructure/adminAuth';
 import { validateOnboardingApplication } from '../domain/staffingRules';
-import { getDistrictInfo } from '../../src/data/mizoramDistricts';
+import { findDistrictVeng, getDistrictInfo } from '../../src/data/mizoramDistricts';
 import type {
   KycQueueItem,
   MizoramDistrict,
@@ -151,7 +152,18 @@ authKycRouter.post('/issue-signed-url', requireAdminAuth, (req, res) => {
 });
 
 authKycRouter.get('/signed-media/:token', (req, res) => {
-  const verification = verifySignedPrivateToken(req.params.token);
+  const { token } = req.params;
+  if (token === 'demo-voice' || token === 'voice-guide') {
+    res.json({
+      verified: true,
+      ttlPolicy: '60s private signed URL',
+      resourceId: token,
+      resourceType: 'voice_note',
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    return;
+  }
+  const verification = verifySignedPrivateToken(token);
   if (!verification.valid) {
     res.status(403).json({ error: verification.error });
     return;
@@ -245,6 +257,7 @@ authKycRouter.post('/review', requireAdminAuth, (req, res) => {
       if (!exists) {
         const dist = item.district || 'Aizawl';
         const info = getDistrictInfo(dist);
+        const vengPoint = findDistrictVeng(dist, item.veng);
         promotedPartner = {
           id: `prt-${Date.now().toString().slice(-5)}`,
           name: item.applicantName,
@@ -253,8 +266,8 @@ authKycRouter.post('/review', requireAdminAuth, (req, res) => {
           veng: item.veng,
           category: item.targetCategory,
           online: true,
-          lat: info.center.lat,
-          lng: info.center.lng,
+          lat: vengPoint?.lat ?? info.center.lat,
+          lng: vengPoint?.lng ?? info.center.lng,
           rating: 4.9,
           completedJobs: 0,
           badges: [assignedBadge],
@@ -270,6 +283,13 @@ authKycRouter.post('/review', requireAdminAuth, (req, res) => {
           lastHeartbeatAt: new Date().toISOString(),
         };
         state.partners.unshift(promotedPartner);
+        liveGpsCache.setPartnerLocation(
+          promotedPartner.id,
+          promotedPartner.lat,
+          promotedPartner.lng,
+          true,
+          3600_000
+        );
       }
     }
   }
@@ -285,4 +305,191 @@ authKycRouter.post('/review', requireAdminAuth, (req, res) => {
   if (promotedWorkforce) realtimeHub.broadcast('staffing_update', { worker: promotedWorkforce });
   if (promotedPartner) realtimeHub.broadcast('errand_update', { partner: promotedPartner });
   res.json({ item, promotedWorkforce, promotedPartner });
+});
+
+// =========================================================================
+// SELF-SERVICE USER, PARTNER & STAFF PROFILE MANAGEMENT ENDPOINTS
+// =========================================================================
+let cachedCustomerProfile = {
+  fullName: 'Lalhriatpuii Chhangte',
+  phone: '+91-9862411022',
+  email: 'hriatpuii.azl@zorun.mz',
+  upiId: 'hriatpuii@oksbi',
+  homeDistrict: 'Aizawl' as MizoramDistrict,
+  homeVeng: 'Dawrpui',
+  ymaSection: 'Section-II YMA',
+  houseLandmark: 'Near Dawrpui Presbyterian Church Concrete Steps, Blue Gate',
+  bioNote: 'Gate bulah bell hmet rawh / Ring doorbell beside concrete steps.',
+  lat: 23.7307,
+  lng: 92.7173,
+  emergencyContactName: 'Pu Zoramthanga (Chhungte)',
+  emergencyContactPhone: '+91-9436140099',
+  avatarUrl: '',
+  updatedAt: new Date().toISOString(),
+};
+
+authKycRouter.get('/profile', (_req, res) => {
+  res.json({ profile: cachedCustomerProfile });
+});
+
+authKycRouter.put('/profile', (req, res) => {
+  const body = (req.body || {}) as Partial<typeof cachedCustomerProfile>;
+  if (typeof body.fullName === 'string' && body.fullName.trim().length < 2) {
+    res.status(400).json({ error: 'Hming kimchang (min 2 characters) ziak rawh / Name must be at least 2 characters.' });
+    return;
+  }
+
+  cachedCustomerProfile = {
+    ...cachedCustomerProfile,
+    fullName:
+      typeof body.fullName === 'string' && body.fullName.trim()
+        ? body.fullName.trim().slice(0, 80)
+        : cachedCustomerProfile.fullName,
+    phone:
+      typeof body.phone === 'string' && body.phone.trim()
+        ? body.phone.trim().slice(0, 24)
+        : cachedCustomerProfile.phone,
+    email:
+      typeof body.email === 'string'
+        ? body.email.trim().slice(0, 120)
+        : cachedCustomerProfile.email,
+    upiId:
+      typeof body.upiId === 'string'
+        ? body.upiId.trim().slice(0, 80)
+        : cachedCustomerProfile.upiId,
+    homeDistrict:
+      typeof body.homeDistrict === 'string' && body.homeDistrict.trim()
+        ? (body.homeDistrict as MizoramDistrict)
+        : cachedCustomerProfile.homeDistrict,
+    homeVeng:
+      typeof body.homeVeng === 'string' && body.homeVeng.trim()
+        ? body.homeVeng.trim().slice(0, 80)
+        : cachedCustomerProfile.homeVeng,
+    ymaSection:
+      typeof body.ymaSection === 'string'
+        ? body.ymaSection.trim().slice(0, 80)
+        : cachedCustomerProfile.ymaSection,
+    houseLandmark:
+      typeof body.houseLandmark === 'string'
+        ? body.houseLandmark.trim().slice(0, 180)
+        : cachedCustomerProfile.houseLandmark,
+    bioNote:
+      typeof body.bioNote === 'string'
+        ? body.bioNote.trim().slice(0, 200)
+        : cachedCustomerProfile.bioNote,
+    lat:
+      typeof body.lat === 'number' && Number.isFinite(body.lat)
+        ? Number(body.lat.toFixed(6))
+        : cachedCustomerProfile.lat,
+    lng:
+      typeof body.lng === 'number' && Number.isFinite(body.lng)
+        ? Number(body.lng.toFixed(6))
+        : cachedCustomerProfile.lng,
+    emergencyContactName:
+      typeof body.emergencyContactName === 'string'
+        ? body.emergencyContactName.trim().slice(0, 80)
+        : cachedCustomerProfile.emergencyContactName,
+    emergencyContactPhone:
+      typeof body.emergencyContactPhone === 'string'
+        ? body.emergencyContactPhone.trim().slice(0, 24)
+        : cachedCustomerProfile.emergencyContactPhone,
+    avatarUrl:
+      typeof body.avatarUrl === 'string' ? body.avatarUrl : cachedCustomerProfile.avatarUrl,
+    updatedAt: new Date().toISOString(),
+  };
+
+  db.addAudit(
+    cachedCustomerProfile.fullName,
+    'USER_PROFILE_UPDATED',
+    `${cachedCustomerProfile.homeDistrict} · ${cachedCustomerProfile.homeVeng} · ${cachedCustomerProfile.phone}`
+  );
+  res.json({ profile: cachedCustomerProfile });
+});
+
+// Self-service Partner (Runner / Rider / Driver) profile update
+authKycRouter.put('/partner-profile/:id', (req, res) => {
+  const { id } = req.params;
+  const body = (req.body || {}) as Partial<PartnerProfile>;
+  const state = db.get();
+  const partner = state.partners.find((p) => p.id === id);
+  if (!partner) {
+    res.status(404).json({ error: 'Partner profile not found' });
+    return;
+  }
+
+  if (typeof body.name === 'string' && body.name.trim().length >= 2) {
+    partner.name = body.name.trim().slice(0, 80);
+  }
+  if (typeof body.phone === 'string' && body.phone.trim()) {
+    partner.phone = body.phone.trim().slice(0, 24);
+  }
+  if (typeof body.district === 'string' && body.district.trim()) {
+    partner.district = body.district as MizoramDistrict;
+  }
+  if (typeof body.veng === 'string' && body.veng.trim()) {
+    partner.veng = body.veng.trim().slice(0, 80);
+    const vengPt = findDistrictVeng(partner.district || 'Aizawl', partner.veng);
+    if (vengPt && typeof body.lat !== 'number') {
+      partner.lat = vengPt.lat;
+      partner.lng = vengPt.lng;
+    }
+  }
+  if (typeof body.lat === 'number' && Number.isFinite(body.lat)) partner.lat = body.lat;
+  if (typeof body.lng === 'number' && Number.isFinite(body.lng)) partner.lng = body.lng;
+  if (typeof body.online === 'boolean') partner.online = body.online;
+
+  liveGpsCache.setPartnerLocation(partner.id, partner.lat, partner.lng, partner.online);
+  db.addAudit(partner.name, 'PARTNER_SELF_PROFILE_UPDATED', `${partner.id} (${partner.district} · ${partner.veng})`);
+  realtimeHub.broadcast('errand_update', { partnerUpdated: partner.id });
+  res.json({ partner });
+});
+
+// Self-service Staff (Awmpui / Family Driver) profile update
+authKycRouter.put('/staff-profile/:id', (req, res) => {
+  const { id } = req.params;
+  const body = (req.body || {}) as Partial<WorkforceMember>;
+  const state = db.get();
+  const worker = state.workforce.find((w) => w.id === id);
+  if (!worker) {
+    res.status(404).json({ error: 'Staff profile not found' });
+    return;
+  }
+
+  if (typeof body.name === 'string' && body.name.trim().length >= 2) {
+    worker.name = body.name.trim().slice(0, 80);
+  }
+  if (typeof body.phone === 'string' && body.phone.trim()) {
+    worker.phone = body.phone.trim().slice(0, 24);
+  }
+  if (typeof body.district === 'string' && body.district.trim()) {
+    worker.district = body.district as MizoramDistrict;
+  }
+  if (typeof body.veng === 'string' && body.veng.trim()) {
+    worker.veng = body.veng.trim().slice(0, 80);
+  }
+  if (typeof body.roleTitle === 'string' && body.roleTitle.trim()) {
+    worker.roleTitle = body.roleTitle.trim().slice(0, 80);
+  }
+  if (Array.isArray(body.skills) && body.skills.length > 0) {
+    worker.skills = body.skills.map((s) => String(s).trim()).filter(Boolean).slice(0, 10);
+  }
+  if (typeof body.dailyRate === 'number' && body.dailyRate >= 200) {
+    worker.dailyRate = Math.round(body.dailyRate);
+  }
+  if (typeof body.monthlyPackageRate === 'number' && body.monthlyPackageRate >= 3000) {
+    worker.monthlyPackageRate = Math.round(body.monthlyPackageRate);
+  }
+  if (typeof body.outstationAvailable === 'boolean') {
+    worker.outstationAvailable = body.outstationAvailable;
+  }
+  if (typeof body.liveInAvailable === 'boolean') {
+    worker.liveInAvailable = body.liveInAvailable;
+  }
+  if (body.availabilityStatus === 'active' || body.availabilityStatus === 'on_leave') {
+    worker.availabilityStatus = body.availabilityStatus;
+  }
+
+  db.addAudit(worker.name, 'STAFF_SELF_PROFILE_UPDATED', `${worker.id} (${worker.district} · ${worker.veng})`);
+  realtimeHub.broadcast('staffing_update', { worker });
+  res.json({ worker });
 });

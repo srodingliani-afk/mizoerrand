@@ -10,7 +10,7 @@ remoteConfigSduiRouter.get('/config', (_req, res) => {
   const state = db.get();
   res.json({
     config: state.remoteConfig,
-    effectiveVisibility: evaluateSduiServiceVisibility(state.remoteConfig),
+    effectiveVisibility: evaluateSduiServiceVisibility(state.remoteConfig, state.plugins),
     plugins: state.plugins.map((p) => ({
       id: p.id,
       key: p.key,
@@ -45,12 +45,13 @@ remoteConfigSduiRouter.post('/quick-toggle', requireAdminAuth, (req, res) => {
     'SDUI_CONFIG_UPDATED',
     `Sunday=${state.remoteConfig.sundayEmergencyMode}, Rain=${state.remoteConfig.rainSurgeMultiplier}x, Traffic=${state.remoteConfig.trafficSurgeMultiplier}x`
   );
+  const effectiveVisibility = evaluateSduiServiceVisibility(state.remoteConfig, state.plugins);
   realtimeHub.broadcast('sdui_update', {
     config: state.remoteConfig,
-    effectiveVisibility: evaluateSduiServiceVisibility(state.remoteConfig),
+    effectiveVisibility,
   });
   res.json({
     config: state.remoteConfig,
-    effectiveVisibility: evaluateSduiServiceVisibility(state.remoteConfig),
+    effectiveVisibility,
   });
 });

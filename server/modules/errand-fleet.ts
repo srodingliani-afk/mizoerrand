@@ -14,9 +14,11 @@ import {
   distanceToRouteCorridorMeters,
   filterJobsForPartner,
   haversineDistanceMeters,
+  isCustomerBlacklisted,
   isPartnerEligibleForJob,
   isPointWithinRouteCorridor,
 } from '../domain/rules';
+import { findNearestMizoramVeng } from '../../src/data/mizoramDistricts';
 import type {
   AccessType,
   ErrandJobType,
@@ -98,6 +100,7 @@ const createJobSchema = estimateFareSchema.extend({
   voiceNoteTranscript: z.string().trim().max(240).optional(),
   declaredValue: z.number().finite().min(0).max(500000).optional().default(500),
   paymentMethod: z.enum(['upi_escrow', 'dynamic_qr_cod']).optional().default('upi_escrow'),
+  payWithWallet: z.boolean().optional().default(false),
   microInsuranceOptIn: z.boolean().optional().default(true),
 });
 
@@ -301,6 +304,18 @@ errandFleetRouter.post('/partners/:id/heartbeat', (req, res) => {
   }
   if (typeof lat === 'number' && Number.isFinite(lat)) partner.lat = lat;
   if (typeof lng === 'number' && Number.isFinite(lng)) partner.lng = lng;
+  if (
+    typeof lat === 'number' &&
+    typeof lng === 'number' &&
+    Number.isFinite(lat) &&
+    Number.isFinite(lng)
+  ) {
+    const nearest = findNearestMizoramVeng(lat, lng, partner.district);
+    if (nearest.isWithinMizoramBounds) {
+      partner.veng = nearest.veng.name;
+      partner.district = nearest.veng.district;
+    }
+  }
   if (typeof online === 'boolean') partner.online = online;
   partner.lastHeartbeatAt = new Date().toISOString();
 
@@ -322,8 +337,13 @@ errandFleetRouter.get('/jobs', (req, res) => {
     const filtered = filterJobsForPartner(
       partner,
       state.errands,
-      state.remoteConfig.codCashLimitRs
-    );
+      state.remoteConfig.codCashLimitRs,
+      state.plugins
+    ).map((job) => ({
+      ...job,
+      // Mask customer handover OTP in Partner API responses so partners must verify at customer's doorstep
+      otpCode: '••••',
+    }));
     res.json({ jobs: filtered, strictFilterApplied: true, partnerCategory: partner.category });
     return;
   }
@@ -362,6 +382,7 @@ async function handleFareEstimate(req: Request, res: Response): Promise<void> {
 
   const fare = calculateAllInclusiveFare({
     category: tier,
+    jobType,
     distanceKm: metrics.distanceKm,
     stopsCount: stops.length,
     needsWalkerHelper,
@@ -437,10 +458,11 @@ errandFleetRouter.post('/jobs', async (req, res) => {
     voiceNoteTranscript,
     declaredValue,
     paymentMethod,
+    payWithWallet,
     microInsuranceOptIn,
   } = parsed.data;
 
-  if (state.blacklistedCustomers.includes(customerId)) {
+  if (isCustomerBlacklisted(state.blacklistedCustomers, customerId, customerName)) {
     res.status(403).json({
       error: 'Account suspended due to repeated prank bookings or fake emergency alerts.',
     });
@@ -459,6 +481,7 @@ errandFleetRouter.post('/jobs', async (req, res) => {
 
   const fare = calculateAllInclusiveFare({
     category: tier,
+    jobType,
     distanceKm: metrics.distanceKm,
     stopsCount: stops.length,
     needsWalkerHelper,
@@ -470,6 +493,25 @@ errandFleetRouter.post('/jobs', async (req, res) => {
 
   const advanceTokenAmount =
     fare.allInclusiveTotal > 1000 ? Math.round(fare.allInclusiveTotal * 0.2) : 0;
+
+  if (payWithWallet && paymentMethod === 'upi_escrow') {
+    if (state.customerWallet.balanceRs < fare.allInclusiveTotal) {
+      res.status(400).json({
+        error: `Insufficient ZoRûn Wallet balance (₹${state.customerWallet.balanceRs}) for ₹${fare.allInclusiveTotal} errand.`,
+      });
+      return;
+    }
+    state.customerWallet.balanceRs -= fare.allInclusiveTotal;
+    state.customerWallet.loyaltyPoints += Math.max(5, Math.round(fare.allInclusiveTotal / 35));
+    state.customerWallet.transactions.unshift({
+      id: `wtx-${Date.now()}`,
+      type: 'parcel_payment',
+      title: `Errand Booking (${title.slice(0, 48)})`,
+      amountRs: -fare.allInclusiveTotal,
+      pointsDelta: Math.max(5, Math.round(fare.allInclusiveTotal / 35)),
+      createdAt: new Date().toISOString(),
+    });
+  }
 
   const cleanVoiceUrl = sanitizeAudioUrl(voiceNoteUrl);
   const cleanVoiceDuration =
@@ -519,7 +561,7 @@ errandFleetRouter.post('/jobs', async (req, res) => {
   };
 
   for (const p of state.partners) {
-    const elig = isPartnerEligibleForJob(p, job, state.remoteConfig.codCashLimitRs);
+    const elig = isPartnerEligibleForJob(p, job, state.remoteConfig.codCashLimitRs, state.plugins);
     if (elig.eligible) {
       const corridorMeters = distanceToRouteCorridorMeters({ lat: p.lat, lng: p.lng }, waypoints);
       if (corridorMeters <= 1800) {
@@ -564,8 +606,17 @@ errandFleetRouter.post('/jobs/:id/bids', (req, res) => {
     res.status(404).json({ error: 'Job or Partner not found' });
     return;
   }
+  if (job.status !== 'bidding') {
+    res.status(400).json({ error: 'Job is no longer accepting new bids' });
+    return;
+  }
 
-  const eligibility = isPartnerEligibleForJob(partner, job, state.remoteConfig.codCashLimitRs);
+  const eligibility = isPartnerEligibleForJob(
+    partner,
+    job,
+    state.remoteConfig.codCashLimitRs,
+    state.plugins
+  );
   if (!eligibility.eligible) {
     res.status(403).json({ error: eligibility.reason || 'Partner category not eligible for this job' });
     return;
@@ -615,6 +666,10 @@ errandFleetRouter.post('/jobs/:id/select-bid', (req, res) => {
     res.status(404).json({ error: 'Job not found' });
     return;
   }
+  if (job.status !== 'bidding') {
+    res.status(400).json({ error: 'Partner has already been selected for this job' });
+    return;
+  }
   const bid = job.bids.find((b) => b.id === bidId);
   if (!bid) {
     res.status(404).json({ error: 'Bid not found' });
@@ -631,26 +686,29 @@ errandFleetRouter.post('/jobs/:id/select-bid', (req, res) => {
     microInsuranceSachet: job.microInsuranceFee,
     declaredValue: job.declaredValue,
   });
-  state.escrowLedger.unshift({
-    id: `esc-${Date.now().toString().slice(-5)}`,
-    orderRef: job.id,
-    grossAllInclusive: split.grossAllInclusive,
-    gstAmount: split.gstAmount,
-    platformCommission: split.platformCommission,
-    microInsuranceSachet: split.microInsuranceSachet,
-    partnerPayout: split.partnerPayout,
-    merchantSettlement: 0,
-    paymentMode: job.paymentMethod,
-    escrowStatus: 'held_until_otp',
-    createdAt: new Date().toISOString(),
-  });
+  const existingLedger = state.escrowLedger.find((e) => e.orderRef === job.id);
+  if (!existingLedger) {
+    state.escrowLedger.unshift({
+      id: `esc-${Date.now().toString().slice(-5)}`,
+      orderRef: job.id,
+      grossAllInclusive: split.grossAllInclusive,
+      gstAmount: split.gstAmount,
+      platformCommission: split.platformCommission,
+      microInsuranceSachet: split.microInsuranceSachet,
+      partnerPayout: split.partnerPayout,
+      merchantSettlement: 0,
+      paymentMode: job.paymentMethod,
+      escrowStatus: 'held_until_otp',
+      createdAt: new Date().toISOString(),
+    });
 
-  postEscrowHoldJournal(state, {
-    orderRef: job.id,
-    customerId: job.customerId,
-    grossAllInclusive: job.allInclusiveTotal,
-    paymentMode: job.paymentMethod,
-  });
+    postEscrowHoldJournal(state, {
+      orderRef: job.id,
+      customerId: job.customerId,
+      grossAllInclusive: job.allInclusiveTotal,
+      paymentMode: job.paymentMethod,
+    });
+  }
 
   db.addAudit(job.customerName, 'BID_SELECTED', `${job.id} -> ${bid.partnerName} (Rs. ${bid.bidAmount})`);
   realtimeHub.broadcast('errand_update', { job });
@@ -685,6 +743,14 @@ errandFleetRouter.post('/jobs/:id/complete-otp', (req, res) => {
   const job = state.errands.find((e) => e.id === req.params.id);
   if (!job) {
     res.status(404).json({ error: 'Job not found' });
+    return;
+  }
+  if (job.status === 'completed') {
+    res.status(400).json({ error: 'Job is already completed and escrow has been settled.' });
+    return;
+  }
+  if (job.status !== 'assigned' && job.status !== 'in_progress') {
+    res.status(400).json({ error: 'Job must be assigned to a partner before OTP completion.' });
     return;
   }
   if (!job.beforeProofUrl || !job.afterProofUrl) {

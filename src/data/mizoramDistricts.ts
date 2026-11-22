@@ -351,7 +351,7 @@ export const MIZORAM_DISTRICTS: MizoramDistrictCapital[] = [
   },
   {
     district: 'Saitual',
-    rtoCode: 'MZ-01S',
+    rtoCode: 'MZ-09',
     elevationM: 1210,
     center: { lat: 23.6947, lng: 92.9748, label: 'Saitual Bazar Hub' },
     corridorNoteEn: 'All 13 Saitual Vengs & Keifang NH-6 eastern junction',
@@ -374,7 +374,7 @@ export const MIZORAM_DISTRICTS: MizoramDistrictCapital[] = [
   },
   {
     district: 'Khawzawl',
-    rtoCode: 'MZ-04K',
+    rtoCode: 'MZ-10',
     elevationM: 1410,
     center: { lat: 23.5335, lng: 93.1846, label: 'Khawzawl Vengthar Hub' },
     corridorNoteEn: 'All 12 Khawzawl Vengs: Vengthar–Hermon–Zaingen–Venglai–Darngawn',
@@ -396,7 +396,7 @@ export const MIZORAM_DISTRICTS: MizoramDistrictCapital[] = [
   },
   {
     district: 'Hnahthial',
-    rtoCode: 'MZ-02H',
+    rtoCode: 'MZ-11',
     elevationM: 945,
     center: { lat: 22.9661, lng: 92.9316, label: 'Hnahthial Bazar Hub' },
     corridorNoteEn: 'All 12 Hnahthial Vengs: Bazar–Electric–Peniel–Chanmari–Tarpho',

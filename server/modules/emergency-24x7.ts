@@ -3,6 +3,11 @@ import { z } from 'zod';
 import { db } from '../infrastructure/store';
 import { realtimeHub } from '../infrastructure/realtimeHub';
 import { requireAdminAuth } from '../infrastructure/adminAuth';
+import {
+  postEscrowHoldJournal,
+  postEscrowSettlementJournal,
+} from '../infrastructure/ledgerService';
+import { calculateEscrowSplit, isCustomerBlacklisted } from '../domain/rules';
 import type { EmergencyCategory, EmergencySosTicket, MizoramDistrict } from '../../src/shared/types';
 
 export const emergency24x7Router = Router();
@@ -119,6 +124,12 @@ emergency24x7Router.post('/dispatch', (req, res) => {
 
   const { customerName, district, veng, lat, lng, category, voiceNoteTranscript } = parsed.data;
   const state = db.get();
+  if (isCustomerBlacklisted(state.blacklistedCustomers, undefined, customerName)) {
+    res.status(403).json({
+      error: 'Account suspended due to repeated prank bookings or fake emergency alerts.',
+    });
+    return;
+  }
   const salariedTech =
     state.partners.find((p) => p.district === (district as MizoramDistrict) && p.isSalariedTechnician && p.online) ||
     state.partners.find((p) => p.district === (district as MizoramDistrict) && p.online) ||
@@ -151,6 +162,56 @@ emergency24x7Router.post('/dispatch', (req, res) => {
   res.status(201).json({ ticket });
 });
 
+function settleSosTicketIfResolved(ticket: EmergencySosTicket): void {
+  if (ticket.status !== 'resolved') return;
+  const state = db.get();
+  const alreadySettled = state.escrowLedger.some((e) => e.orderRef === ticket.id);
+  if (alreadySettled) return;
+
+  const grossTotal = Math.max(100, Math.round(ticket.standardizedRate + ticket.sparePartsAmount));
+  const split = calculateEscrowSplit({
+    grossAllInclusive: grossTotal,
+    productAmount: ticket.sparePartsAmount,
+    microInsuranceSachet: 0,
+    declaredValue: grossTotal,
+  });
+
+  const entry = {
+    id: `esc-${Date.now().toString().slice(-5)}`,
+    orderRef: ticket.id,
+    grossAllInclusive: split.grossAllInclusive,
+    gstAmount: split.gstAmount,
+    platformCommission: split.platformCommission,
+    microInsuranceSachet: 0,
+    partnerPayout: split.partnerPayout,
+    merchantSettlement: split.merchantSettlement,
+    paymentMode: 'upi_escrow' as const,
+    escrowStatus: 'split_settled' as const,
+    createdAt: new Date().toISOString(),
+  };
+  state.escrowLedger.unshift(entry);
+
+  const tech = state.partners.find(
+    (p) => p.name.toLowerCase().includes(ticket.assignedTechName.toLowerCase()) || p.isSalariedTechnician
+  );
+  if (tech) {
+    tech.walletBalance += split.partnerPayout + ticket.sparePartsAmount;
+    tech.completedJobs += 1;
+  }
+
+  postEscrowHoldJournal(state, {
+    orderRef: ticket.id,
+    customerId: ticket.customerName,
+    grossAllInclusive: grossTotal,
+    paymentMode: 'upi_escrow',
+  });
+  postEscrowSettlementJournal(state, {
+    entry,
+    partnerId: tech?.id || 'sos-tech',
+    merchantId: 'spare-parts-reimbursement',
+  });
+}
+
 emergency24x7Router.post('/tickets/:id/update', requireAdminAuth, (req, res) => {
   const { status, sparePartsAmount, sparePartReceiptUrl } = req.body as {
     status?: EmergencySosTicket['status'];
@@ -167,6 +228,7 @@ emergency24x7Router.post('/tickets/:id/update', requireAdminAuth, (req, res) => 
   if (typeof sparePartsAmount === 'number') ticket.sparePartsAmount = Math.max(0, sparePartsAmount);
   if (sparePartReceiptUrl) ticket.sparePartReceiptUrl = sparePartReceiptUrl;
 
+  settleSosTicketIfResolved(ticket);
   db.commit();
   realtimeHub.broadcast('sos_alert', { ticket });
   res.json({ ticket });
@@ -200,6 +262,7 @@ emergency24x7Router.post('/tickets/:id/tech-update', (req, res) => {
     ticket.assignedTechName = techName;
   }
 
+  settleSosTicketIfResolved(ticket);
   db.addAudit(
     ticket.assignedTechName,
     'TECH_SOS_UPDATE',

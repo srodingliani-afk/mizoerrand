@@ -1,7 +1,26 @@
 import type { MizoramDistrict, SavedPlace } from '../shared/types';
 import { getDistrictInfo } from '../data/mizoramDistricts';
 
+export interface UserProfileIdentity {
+  fullName: string;
+  phone: string;
+  email: string;
+  upiId: string;
+  homeDistrict: MizoramDistrict;
+  homeVeng: string;
+  ymaSection: string;
+  houseLandmark: string;
+  bioNote: string;
+  lat?: number;
+  lng?: number;
+  emergencyContactName: string;
+  emergencyContactPhone: string;
+  avatarUrl?: string;
+  updatedAt: string;
+}
+
 export interface UserAppSettings {
+  profile: UserProfileIdentity;
   theme: 'light' | 'dark';
   hapticsEnabled: boolean;
   defaultPaymentMethod: 'upi_escrow' | 'dynamic_qr_cod';
@@ -14,6 +33,24 @@ export interface UserAppSettings {
 }
 
 const SETTINGS_STORAGE_KEY = 'zorun_user_settings_v1';
+
+export const DEFAULT_USER_PROFILE: UserProfileIdentity = {
+  fullName: 'Lalhriatpuii Chhangte',
+  phone: '+91-9862411022',
+  email: 'hriatpuii.azl@zorun.mz',
+  upiId: 'hriatpuii@oksbi',
+  homeDistrict: 'Aizawl',
+  homeVeng: 'Dawrpui',
+  ymaSection: 'Section-II YMA',
+  houseLandmark: 'Near Dawrpui Presbyterian Church Concrete Steps, Blue Gate',
+  bioNote: 'Gate bulah bell hmet rawh / Ring doorbell beside concrete steps.',
+  lat: 23.7307,
+  lng: 92.7173,
+  emergencyContactName: 'Pu Zoramthanga (Chhungte)',
+  emergencyContactPhone: '+91-9436140099',
+  avatarUrl: '',
+  updatedAt: '2026-11-23T00:00:00.000Z',
+};
 
 export const DEFAULT_SAVED_PLACES: SavedPlace[] = [
   {
@@ -107,6 +144,7 @@ export function getDistrictSavedPlaces(
 }
 
 export const DEFAULT_USER_SETTINGS: UserAppSettings = {
+  profile: DEFAULT_USER_PROFILE,
   theme: 'light',
   hapticsEnabled: true,
   defaultPaymentMethod: 'upi_escrow',
@@ -130,7 +168,69 @@ export function loadUserSettings(): UserAppSettings {
             .filter((p) => p && typeof p.id === 'string' && typeof p.label === 'string' && typeof p.veng === 'string')
             .slice(0, 10)
         : DEFAULT_SAVED_PLACES;
+    const rawProfile = (parsed.profile || {}) as Partial<UserProfileIdentity>;
+    const profile: UserProfileIdentity = {
+      fullName:
+        typeof rawProfile.fullName === 'string' && rawProfile.fullName.trim()
+          ? rawProfile.fullName.trim().slice(0, 80)
+          : DEFAULT_USER_PROFILE.fullName,
+      phone:
+        typeof rawProfile.phone === 'string' && rawProfile.phone.trim()
+          ? rawProfile.phone.trim().slice(0, 24)
+          : DEFAULT_USER_PROFILE.phone,
+      email:
+        typeof rawProfile.email === 'string'
+          ? rawProfile.email.trim().slice(0, 120)
+          : DEFAULT_USER_PROFILE.email,
+      upiId:
+        typeof rawProfile.upiId === 'string'
+          ? rawProfile.upiId.trim().slice(0, 80)
+          : DEFAULT_USER_PROFILE.upiId,
+      homeDistrict:
+        typeof rawProfile.homeDistrict === 'string'
+          ? (rawProfile.homeDistrict as MizoramDistrict)
+          : DEFAULT_USER_PROFILE.homeDistrict,
+      homeVeng:
+        typeof rawProfile.homeVeng === 'string' && rawProfile.homeVeng.trim()
+          ? rawProfile.homeVeng.trim().slice(0, 80)
+          : DEFAULT_USER_PROFILE.homeVeng,
+      ymaSection:
+        typeof rawProfile.ymaSection === 'string'
+          ? rawProfile.ymaSection.trim().slice(0, 80)
+          : DEFAULT_USER_PROFILE.ymaSection,
+      houseLandmark:
+        typeof rawProfile.houseLandmark === 'string'
+          ? rawProfile.houseLandmark.trim().slice(0, 180)
+          : DEFAULT_USER_PROFILE.houseLandmark,
+      bioNote:
+        typeof rawProfile.bioNote === 'string'
+          ? rawProfile.bioNote.trim().slice(0, 200)
+          : DEFAULT_USER_PROFILE.bioNote,
+      lat:
+        typeof rawProfile.lat === 'number' && Number.isFinite(rawProfile.lat)
+          ? rawProfile.lat
+          : DEFAULT_USER_PROFILE.lat,
+      lng:
+        typeof rawProfile.lng === 'number' && Number.isFinite(rawProfile.lng)
+          ? rawProfile.lng
+          : DEFAULT_USER_PROFILE.lng,
+      emergencyContactName:
+        typeof rawProfile.emergencyContactName === 'string'
+          ? rawProfile.emergencyContactName.trim().slice(0, 80)
+          : DEFAULT_USER_PROFILE.emergencyContactName,
+      emergencyContactPhone:
+        typeof rawProfile.emergencyContactPhone === 'string'
+          ? rawProfile.emergencyContactPhone.trim().slice(0, 24)
+          : DEFAULT_USER_PROFILE.emergencyContactPhone,
+      avatarUrl:
+        typeof rawProfile.avatarUrl === 'string' ? rawProfile.avatarUrl : DEFAULT_USER_PROFILE.avatarUrl,
+      updatedAt:
+        typeof rawProfile.updatedAt === 'string'
+          ? rawProfile.updatedAt
+          : DEFAULT_USER_PROFILE.updatedAt,
+    };
     return {
+      profile,
       theme: parsed.theme === 'dark' ? 'dark' : 'light',
       hapticsEnabled:
         typeof parsed.hapticsEnabled === 'boolean'

@@ -176,6 +176,13 @@ interface FirebaseAuthContextValue {
   disconnectDriveToken: () => void;
   signOutFirebase: () => Promise<void>;
   syncProfileDistrict: (district: MizoramDistrict) => Promise<void>;
+  syncUserProfileIdentity: (patch: {
+    displayName?: string;
+    district?: MizoramDistrict;
+    photoUrl?: string;
+    phone?: string;
+    email?: string;
+  }) => Promise<void>;
   clearAuthError: () => void;
 }
 
@@ -360,6 +367,48 @@ export const FirebaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     [profile, user]
   );
 
+  const syncUserProfileIdentity = useCallback(
+    async (patch: {
+      displayName?: string;
+      district?: MizoramDistrict;
+      photoUrl?: string;
+      phone?: string;
+      email?: string;
+    }) => {
+      if (!user || !user.emailVerified) return;
+      try {
+        const publicUpdate: Record<string, unknown> = { updatedAt: serverTimestamp() };
+        if (patch.displayName) publicUpdate.displayName = patch.displayName.trim().slice(0, 80);
+        if (patch.district) publicUpdate.district = patch.district;
+        if (patch.photoUrl && patch.photoUrl.length <= 512) publicUpdate.photoUrl = patch.photoUrl;
+
+        await updateDoc(doc(firestoreDb, 'users', user.uid, 'public', 'profile'), publicUpdate);
+        setProfile((prev) =>
+          prev
+            ? {
+                ...prev,
+                displayName: patch.displayName ? patch.displayName.trim().slice(0, 80) : prev.displayName,
+                district: patch.district || prev.district,
+                photoUrl: patch.photoUrl || prev.photoUrl,
+              }
+            : prev
+        );
+
+        if (patch.phone || patch.email) {
+          const privateUpdate: Record<string, unknown> = { updatedAt: serverTimestamp() };
+          if (patch.phone) privateUpdate.phone = patch.phone.trim().slice(0, 24);
+          if (patch.email) privateUpdate.email = patch.email.trim().slice(0, 160);
+          await setDoc(doc(firestoreDb, 'users', user.uid, 'private', 'info'), privateUpdate, {
+            merge: true,
+          });
+        }
+      } catch {
+        // Non-fatal if Firestore is offline; local profile & server API remain synced
+      }
+    },
+    [user]
+  );
+
   const effectiveRole: UserRole =
     profile?.role ||
     (user?.email === 'srodingliani@gmail.com' ? 'SUPER_ADMIN' : 'CUSTOMER');
@@ -378,6 +427,7 @@ export const FirebaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         disconnectDriveToken,
         signOutFirebase,
         syncProfileDistrict,
+        syncUserProfileIdentity,
         clearAuthError: () => setAuthError(null),
       }}
     >

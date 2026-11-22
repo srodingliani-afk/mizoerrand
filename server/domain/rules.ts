@@ -7,9 +7,34 @@ import type {
   LatLng,
   PartnerCategory,
   PartnerProfile,
+  SystemPlugin,
 } from '../../src/shared/types';
 
 const EARTH_RADIUS_METERS = 6371000;
+
+export function isPluginEnabled(plugins: SystemPlugin[] | undefined, key: string): boolean {
+  if (!plugins || plugins.length === 0) return true;
+  const found = plugins.find((p) => p.key === key);
+  return found ? found.enabled : true;
+}
+
+export function isCustomerBlacklisted(
+  blacklistedCustomers: string[],
+  customerId?: string,
+  customerName?: string
+): boolean {
+  if (!blacklistedCustomers || blacklistedCustomers.length === 0) return false;
+  const normalizedSet = new Set(
+    blacklistedCustomers.map((entry) => entry.trim().toLowerCase()).filter(Boolean)
+  );
+  if (customerId && normalizedSet.has(customerId.trim().toLowerCase())) {
+    return true;
+  }
+  if (customerName && normalizedSet.has(customerName.trim().toLowerCase())) {
+    return true;
+  }
+  return false;
+}
 
 export function toRadians(deg: number): number {
   return (deg * Math.PI) / 180;
@@ -107,7 +132,8 @@ export function isPartnerEligibleForJob(
     | 'paymentMethod'
     | 'allInclusiveTotal'
   >,
-  codLimitRs = 2500
+  codLimitRs = 2500,
+  plugins?: SystemPlugin[]
 ): { eligible: boolean; reason?: string } {
   if (!partner.online) {
     return { eligible: false, reason: 'Partner is offline' };
@@ -144,6 +170,8 @@ export function isPartnerEligibleForJob(
     };
   }
 
+  const strictWalkerGuard = isPluginEnabled(plugins, 'strict-walker-step-routing');
+
   const isWalkerExclusive =
     WALKER_EXCLUSIVE_JOB_TYPES.has(job.jobType) ||
     job.accessType === 'long_steps_walk' ||
@@ -159,8 +187,17 @@ export function isPartnerEligibleForJob(
     return { eligible: false, reason: 'Motorized vehicle required for this route' };
   }
 
-  // Vehicles (B, C, D) MUST NOT receive walker-exclusive jobs
+  // Vehicles (B, C, D) MUST NOT receive walker-exclusive jobs when strict guard is enabled
   if (isWalkerExclusive) {
+    if (strictWalkerGuard) {
+      return {
+        eligible: false,
+        reason: 'Walker-exclusive errand (<1.5km / long steps / queue / helper)',
+      };
+    }
+    if (partner.category === 'bike' && job.accessType === 'vehicle_accessible') {
+      return { eligible: true };
+    }
     return {
       eligible: false,
       reason: 'Walker-exclusive errand (<1.5km / long steps / queue / helper)',
@@ -197,9 +234,19 @@ export function isPartnerEligibleForJob(
 export function filterJobsForPartner(
   partner: PartnerProfile,
   jobs: ErrandRequest[],
-  codLimitRs = 2500
+  codLimitRs = 2500,
+  plugins?: SystemPlugin[]
 ): ErrandRequest[] {
-  return jobs.filter((job) => isPartnerEligibleForJob(partner, job, codLimitRs).eligible);
+  return jobs.filter((job) => {
+    if (job.status === 'cancelled') return false;
+    if (job.assignedPartnerId === partner.id) {
+      return true;
+    }
+    if (job.status && job.status !== 'bidding') {
+      return false;
+    }
+    return isPartnerEligibleForJob(partner, job, codLimitRs, plugins).eligible;
+  });
 }
 
 const NON_RETURNABLE_HYGIENE: ReadonlySet<HygieneCategory> = new Set([
@@ -214,6 +261,7 @@ export function validateCheckBeforePayReturn(params: {
   monthlyReturnLimit: number;
   returnDeliveryFee: number;
   action: 'accept' | 'reject';
+  plugins?: SystemPlugin[];
 }): {
   allowed: boolean;
   canOpenBox: boolean;
@@ -239,7 +287,9 @@ export function validateCheckBeforePayReturn(params: {
     };
   }
 
-  if (params.userReturnsThisMonth >= params.monthlyReturnLimit) {
+  const safeguardEnabled = isPluginEnabled(params.plugins, 'en-hmasak-phawt-safeguard');
+
+  if (safeguardEnabled && params.userReturnsThisMonth >= params.monthlyReturnLimit) {
     return {
       allowed: false,
       canOpenBox: true,
@@ -248,7 +298,9 @@ export function validateCheckBeforePayReturn(params: {
     };
   }
 
-  const clampedFee = Math.max(40, Math.min(50, Math.round(params.returnDeliveryFee)));
+  const clampedFee = safeguardEnabled
+    ? Math.max(40, Math.min(50, Math.round(params.returnDeliveryFee)))
+    : Math.max(0, Math.round(params.returnDeliveryFee));
   return {
     allowed: true,
     canOpenBox: true,
@@ -272,8 +324,14 @@ export function getKailawnSurcharge(
   return KAILAWN_STEP_SURCHARGE_RS[stepTier] ?? 0;
 }
 
+export const STATIONARY_JOB_EFFORT_RS: Partial<Record<ErrandJobType, number>> = {
+  queue_standing: 80,
+  truck_helper: 110,
+};
+
 export function calculateAllInclusiveFare(params: {
   category: PartnerCategory;
+  jobType?: ErrandJobType;
   distanceKm: number;
   stopsCount: number;
   needsWalkerHelper: boolean;
@@ -285,6 +343,7 @@ export function calculateAllInclusiveFare(params: {
   allInclusiveTotal: number;
   microInsuranceFee: number;
   kailawnSurchargeRs: number;
+  stationaryEffortRs: number;
   surgeMultiplier: number;
 } {
   const baseByCategory: Record<PartnerCategory, number> = {
@@ -311,8 +370,11 @@ export function calculateAllInclusiveFare(params: {
     params.kailawnStepTier
   );
 
+  const stationaryEffortRs = params.jobType ? STATIONARY_JOB_EFFORT_RS[params.jobType] ?? 0 : 0;
+
   const rawTrip =
     (baseByCategory[params.category] +
+      stationaryEffortRs +
       Math.max(0.5, params.distanceKm) * perKm[params.category] +
       params.stopsCount * 25 +
       (params.needsWalkerHelper ? 120 : 0)) *
@@ -328,6 +390,7 @@ export function calculateAllInclusiveFare(params: {
     allInclusiveTotal,
     microInsuranceFee,
     kailawnSurchargeRs,
+    stationaryEffortRs,
     surgeMultiplier,
   };
 }
@@ -373,7 +436,10 @@ export function calculateEscrowSplit(params: {
   };
 }
 
-export function evaluateSduiServiceVisibility(config: AppRemoteConfig): {
+export function evaluateSduiServiceVisibility(
+  config: AppRemoteConfig,
+  plugins?: SystemPlugin[]
+): {
   errands: boolean;
   marketplace: boolean;
   workforce: boolean;
@@ -381,7 +447,8 @@ export function evaluateSduiServiceVisibility(config: AppRemoteConfig): {
   emergency24x7: boolean;
   sundayRestrictionActive: boolean;
 } {
-  if (config.sundayEmergencyMode) {
+  const sundayRuleEnabled = isPluginEnabled(plugins, 'sunday-emergency-mode-rule');
+  if (config.sundayEmergencyMode && sundayRuleEnabled) {
     return {
       errands: config.visibleServices.errands,
       marketplace: false, // Sunday Emergency Mode restricts commercial retail

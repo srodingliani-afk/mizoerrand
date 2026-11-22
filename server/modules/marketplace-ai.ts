@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { Type } from '@google/genai';
 import { db } from '../infrastructure/store';
-import { getGeminiClient } from '../infrastructure/geminiClient';
+import { getGeminiClient, getGeminiModel } from '../infrastructure/geminiClient';
 import { realtimeHub } from '../infrastructure/realtimeHub';
 import { isTrustedMediaUrl } from '../infrastructure/driveStorage';
 import {
@@ -9,7 +9,12 @@ import {
   postEscrowSettlementJournal,
   recordDoubleEntryJournal,
 } from '../infrastructure/ledgerService';
-import { calculateEscrowSplit, validateCheckBeforePayReturn } from '../domain/rules';
+import {
+  calculateEscrowSplit,
+  evaluateSduiServiceVisibility,
+  isCustomerBlacklisted,
+  validateCheckBeforePayReturn,
+} from '../domain/rules';
 import type {
   HygieneCategory,
   MarketplaceOrder,
@@ -28,9 +33,51 @@ marketplaceAiRouter.get('/products', (_req, res) => {
   });
 });
 
+marketplaceAiRouter.patch('/products/:id', (req, res) => {
+  const { price, stock, titleEn, titleMiz, checkBeforePayEligible } = req.body as Partial<MarketplaceProduct>;
+  const state = db.get();
+  const product = state.products.find((p) => p.id === req.params.id);
+  if (!product) {
+    res.status(404).json({ error: 'Product not found' });
+    return;
+  }
+  if (typeof price === 'number' && price >= 10) {
+    product.price = Math.round(price);
+  }
+  if (typeof stock === 'number' && stock >= 0) {
+    product.stock = Math.round(stock);
+  }
+  if (typeof titleEn === 'string' && titleEn.trim()) {
+    product.titleEn = titleEn.trim();
+  }
+  if (typeof titleMiz === 'string' && titleMiz.trim()) {
+    product.titleMiz = titleMiz.trim();
+  }
+  if (typeof checkBeforePayEligible === 'boolean' && product.hygieneCategory === 'standard') {
+    product.checkBeforePayEligible = checkBeforePayEligible;
+  }
+  db.addAudit(product.shopName, 'PRODUCT_UPDATED', `${product.id} (Rs. ${product.price}, Stock: ${product.stock})`);
+  realtimeHub.broadcast('marketplace_update', { product });
+  res.json({ product });
+});
+
+marketplaceAiRouter.delete('/products/:id', (req, res) => {
+  const state = db.get();
+  const idx = state.products.findIndex((p) => p.id === req.params.id);
+  if (idx === -1) {
+    res.status(404).json({ error: 'Product not found' });
+    return;
+  }
+  const [removed] = state.products.splice(idx, 1);
+  db.addAudit(removed.shopName, 'PRODUCT_DELETED', `${removed.id} (${removed.titleEn})`);
+  realtimeHub.broadcast('marketplace_update', { deletedProductId: removed.id });
+  res.json({ deleted: removed.id });
+});
+
 marketplaceAiRouter.post('/orders', (req, res) => {
   const state = db.get();
-  if (state.remoteConfig.sundayEmergencyMode) {
+  const visibility = evaluateSduiServiceVisibility(state.remoteConfig, state.plugins);
+  if (!visibility.marketplace) {
     res.status(403).json({
       error: 'Sunday Emergency Mode is active: non-emergency retail marketplace is paused today.',
     });
@@ -39,25 +86,65 @@ marketplaceAiRouter.post('/orders', (req, res) => {
 
   const {
     customerId = 'cust-1',
+    customerName,
     productId,
     microInsuranceOptIn = true,
+    payWithWallet = false,
     voiceNoteUrl,
     voiceNoteDurationSec,
     voiceNoteTranscript,
   } = req.body as {
     customerId?: string;
+    customerName?: string;
     productId: string;
     microInsuranceOptIn?: boolean;
+    payWithWallet?: boolean;
     voiceNoteUrl?: string;
     voiceNoteDurationSec?: number;
     voiceNoteTranscript?: string;
   };
+
+  if (isCustomerBlacklisted(state.blacklistedCustomers, customerId, customerName)) {
+    res.status(403).json({
+      error: 'Account suspended due to repeated prank bookings or return abuse.',
+    });
+    return;
+  }
 
   const product = state.products.find((p) => p.id === productId);
   if (!product) {
     res.status(404).json({ error: 'Product not found' });
     return;
   }
+  if (product.stock <= 0) {
+    res.status(400).json({ error: 'Product is currently out of stock' });
+    return;
+  }
+
+  const deliveryFee = 55;
+  const microInsuranceFee = microInsuranceOptIn ? state.remoteConfig.microInsuranceSachetRs : 0;
+  const allInclusiveTotal = product.price + deliveryFee + microInsuranceFee;
+
+  if (payWithWallet) {
+    if (state.customerWallet.balanceRs < allInclusiveTotal) {
+      res.status(400).json({
+        error: `Insufficient ZoRûn Wallet balance (₹${state.customerWallet.balanceRs}) for ₹${allInclusiveTotal} order.`,
+      });
+      return;
+    }
+    state.customerWallet.balanceRs -= allInclusiveTotal;
+    state.customerWallet.loyaltyPoints += Math.max(5, Math.round(allInclusiveTotal / 40));
+    state.customerWallet.transactions.unshift({
+      id: `wtx-${Date.now()}`,
+      type: 'parcel_payment',
+      title: `Marketplace Order (${product.titleEn})`,
+      amountRs: -allInclusiveTotal,
+      pointsDelta: Math.max(5, Math.round(allInclusiveTotal / 40)),
+      createdAt: new Date().toISOString(),
+    });
+  }
+
+  product.stock = Math.max(0, product.stock - 1);
 
   const cleanVoiceUrl = isTrustedMediaUrl(voiceNoteUrl, 'audio');
   const cleanDuration =
@@ -69,14 +156,23 @@ marketplaceAiRouter.post('/orders', (req, res) => {
       ? voiceNoteTranscript.trim().slice(0, 200)
       : undefined;
 
-  const deliveryFee = 55;
-  const microInsuranceFee = microInsuranceOptIn ? state.remoteConfig.microInsuranceSachetRs : 0;
-  const allInclusiveTotal = product.price + deliveryFee + microInsuranceFee;
+  const targetDistrict = product.district || 'Aizawl';
+  const assignedRunner =
+    state.partners.find(
+      (p) =>
+        p.online &&
+        (p.district || 'Aizawl') === targetDistrict &&
+        (p.category === 'walker' || p.category === 'bike')
+    ) ||
+    state.partners.find((p) => p.online && (p.district || 'Aizawl') === targetDistrict) ||
+    state.partners.find((p) => p.online);
 
   const chatMessages: MarketplaceOrder['chatMessages'] = [
     {
       sender: 'merchant',
-      text: `Chibai! Your order from ${product.shopName} (${product.veng}) is packed.`,
+      text: `Chibai! Your order from ${product.shopName} (${product.veng}) is packed.${
+        assignedRunner ? ` Runner ${assignedRunner.name} assigned for doorstep delivery & inspection.` : ''
+      }`,
       at: new Date().toISOString(),
     },
   ];
@@ -96,7 +192,7 @@ marketplaceAiRouter.post('/orders', (req, res) => {
     productId: product.id,
     productTitle: product.titleEn,
     shopName: product.shopName,
-    district: product.district || 'Aizawl',
+    district: targetDistrict,
     veng: product.veng,
     price: product.price,
     deliveryFee,
@@ -106,6 +202,9 @@ marketplaceAiRouter.post('/orders', (req, res) => {
     hygieneCategory: product.hygieneCategory,
     returnFeeOnReject: state.remoteConfig.returnDeliveryFee,
     status: 'awaiting_inspection',
+    assignedPartnerId: assignedRunner?.id,
+    assignedPartnerName: assignedRunner?.name,
+    paidViaWallet: Boolean(payWithWallet),
     voiceNoteUrl: cleanVoiceUrl,
     voiceNoteDurationSec: cleanDuration,
     voiceNoteTranscript: cleanTranscript,
@@ -127,6 +226,10 @@ marketplaceAiRouter.post('/orders/:id/inspect', (req, res) => {
     res.status(404).json({ error: 'Order not found' });
     return;
   }
+  if (order.status !== 'awaiting_inspection') {
+    res.status(400).json({ error: 'Order has already been inspected and settled' });
+    return;
+  }
 
   const currentReturns = state.userMonthlyReturns[order.customerId] ?? 0;
   const check = validateCheckBeforePayReturn({
@@ -135,12 +238,15 @@ marketplaceAiRouter.post('/orders/:id/inspect', (req, res) => {
     monthlyReturnLimit: state.remoteConfig.monthlyReturnLimit,
     returnDeliveryFee: state.remoteConfig.returnDeliveryFee,
     action,
+    plugins: state.plugins,
   });
 
   if (!check.allowed) {
     res.status(400).json({ error: check.reason, canOpenBox: check.canOpenBox });
     return;
   }
+
+  const deliveryPartner = state.partners.find((p) => p.id === order.assignedPartnerId);
 
   if (action === 'accept') {
     order.status = 'accepted_paid';
@@ -164,6 +270,10 @@ marketplaceAiRouter.post('/orders/:id/inspect', (req, res) => {
       createdAt: new Date().toISOString(),
     };
     state.escrowLedger.unshift(entry);
+    if (deliveryPartner) {
+      deliveryPartner.walletBalance += split.partnerPayout;
+      deliveryPartner.completedJobs += 1;
+    }
     postEscrowHoldJournal(state, {
       orderRef: order.id,
       customerId: order.customerId,
@@ -172,13 +282,33 @@ marketplaceAiRouter.post('/orders/:id/inspect', (req, res) => {
     });
     postEscrowSettlementJournal(state, {
       entry,
+      partnerId: deliveryPartner?.id,
       merchantId: order.shopName,
     });
   } else {
     order.status = 'rejected_return_fee_charged';
     state.userMonthlyReturns[order.customerId] = currentReturns + 1;
+    const product = state.products.find((p) => p.id === order.productId);
+    if (product) {
+      product.stock += 1;
+    }
     const gstAmount = Math.round((check.returnFeeCharged * 18) / 118);
     const partnerPayout = check.returnFeeCharged - 5 - gstAmount;
+    if (deliveryPartner) {
+      deliveryPartner.walletBalance += partnerPayout;
+      deliveryPartner.completedJobs += 1;
+    }
+    if (order.paidViaWallet && order.allInclusiveTotal > check.returnFeeCharged) {
+      const refundAmt = order.allInclusiveTotal - check.returnFeeCharged;
+      state.customerWallet.balanceRs += refundAmt;
+      state.customerWallet.transactions.unshift({
+        id: `wtx-${Date.now()}`,
+        type: 'topup',
+        title: `Check-Before-Pay Return Refund (${order.id})`,
+        amountRs: refundAmt,
+        createdAt: new Date().toISOString(),
+      });
+    }
     state.escrowLedger.unshift({
       id: `esc-${Date.now().toString().slice(-5)}`,
       orderRef: `${order.id}-RET`,
@@ -200,7 +330,7 @@ marketplaceAiRouter.post('/orders/:id/inspect', (req, res) => {
         { account: 'ASSET:UPI_CLEARING', side: 'debit', amountRs: check.returnFeeCharged },
         { account: 'LIABILITY:GST_18_OUTPUT', side: 'credit', amountRs: gstAmount },
         { account: 'REVENUE:PLATFORM_COMMISSION', side: 'credit', amountRs: 5 },
-        { account: 'PAYABLE:PARTNER:fleet', side: 'credit', amountRs: partnerPayout },
+        { account: `PAYABLE:PARTNER:${deliveryPartner?.id || 'fleet'}`, side: 'credit', amountRs: partnerPayout },
       ],
     });
   }
@@ -280,7 +410,7 @@ Also recommend hygieneCategory ('standard', 'innerwear', 'opened_cosmetics', or 
     });
 
     const response = await ai.models.generateContent({
-      model: 'gemini-4-hydrogen',
+      model: getGeminiModel(),
       contents: { parts },
       config: {
         responseMimeType: 'application/json',

@@ -737,6 +737,23 @@ export default function App() {
               {lang === 'miz' ? 'In (Home)' : 'Home'}
             </button>
 
+            <button
+              type="button"
+              onClick={() => selectCustomerTab('profile')}
+              className={`inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors hover:text-slate-900 dark:hover:text-white pb-0.5 ${
+                mode === 'customer' && mobileTab === 'profile'
+                  ? 'text-emerald-800 dark:text-emerald-400 font-semibold border-b-2 border-emerald-700 dark:border-emerald-400'
+                  : ''
+              }`}
+            >
+              <UserCircle2 className="w-4 h-4 text-emerald-700 dark:text-emerald-400" />
+              <span>
+                {lang === 'miz'
+                  ? `Kei (${userSettings.profile.fullName.split(' ')[0]})`
+                  : `My Profile (${userSettings.profile.fullName.split(' ')[0]})`}
+              </span>
+            </button>
+
             {/* Single Clean "Work with ZoRûn" Role Portals Dropdown (excludes /admin & /backend) */}
             <div ref={portalMenuRef} className="relative">
               <button
@@ -935,7 +952,14 @@ export default function App() {
               }}
               remoteConfig={remoteConfig}
               userSettings={userSettings}
+              onUpdateUserSettings={handleUpdateUserSettings}
               onOpenSettings={() => setSettingsSheetOpen(true)}
+              customerWallet={customerWallet}
+              errands={errands}
+              orders={orders}
+              staffingBookings={staffingBookings}
+              sosTickets={sosTickets}
+              monthlyReturnsUsed={userMonthlyReturns['cust-1'] || 0}
             />
           )}
 

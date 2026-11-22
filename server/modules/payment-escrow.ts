@@ -36,6 +36,10 @@ paymentEscrowRouter.post('/partners/:id/deposit-cod', (req, res) => {
     res.status(404).json({ error: 'Partner not found' });
     return;
   }
+  if (partner.codCashHeld <= 0) {
+    res.status(400).json({ error: 'No COD cash balance held to deposit.' });
+    return;
+  }
   const deposited = partner.codCashHeld;
   partner.codCashHeld = 0;
   db.addAudit(partner.name, 'COD_UPI_DEPOSIT', `Settled Rs. ${deposited} COD cash via UPI`);
@@ -95,12 +99,28 @@ paymentEscrowRouter.post('/disputes/:id/resolve', requireAdminAuth, (req, res) =
     res.status(404).json({ error: 'Dispute not found' });
     return;
   }
+  const wasAlreadyBlacklisted = dispute.status === 'blacklisted';
   dispute.status = resolution;
   if (blacklistCustomer || resolution === 'blacklisted') {
-    if (!state.blacklistedCustomers.includes(dispute.customerName)) {
-      state.blacklistedCustomers.push(dispute.customerName);
+    const matchedErrand = state.errands.find(
+      (e) => e.id === dispute.orderRef || e.customerName.toLowerCase() === dispute.customerName.toLowerCase()
+    );
+    const matchedOrder = state.marketplaceOrders.find((o) => o.id === dispute.orderRef);
+    const candidateIds = [
+      dispute.customerName,
+      matchedErrand?.customerId,
+      matchedOrder?.customerId,
+    ].filter((val): val is string => Boolean(val && val.trim()));
+
+    for (const idOrName of candidateIds) {
+      if (!state.blacklistedCustomers.includes(idOrName)) {
+        state.blacklistedCustomers.push(idOrName);
+      }
     }
-    dispute.prankStrikeCount += 1;
+    if (!wasAlreadyBlacklisted) {
+      dispute.prankStrikeCount += 1;
+      state.prankStrikeCounts[dispute.customerName] = dispute.prankStrikeCount;
+    }
   }
   db.addAudit('dispute-center', 'DISPUTE_RESOLVED', `${dispute.id} -> ${resolution}`);
   realtimeHub.broadcast('escrow_update', { dispute });

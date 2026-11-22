@@ -1,8 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { BellRing, Camera, CheckCircle2, Navigation, Radio, Wallet } from 'lucide-react';
 import type { AppRemoteConfig, ErrandRequest, Language, MizoramDistrict, PartnerProfile } from '../shared/types';
 import { TRANSLATIONS } from '../i18n/translations';
-import { ALL_MIZORAM_DISTRICT_NAMES } from '../data/mizoramDistricts';
+import { ALL_MIZORAM_DISTRICT_NAMES, getVengsForDistrict } from '../data/mizoramDistricts';
 import {
   detectPartnerWrapperEnvironment,
   triggerEmergencySirenTone,
@@ -11,6 +11,7 @@ import {
 import { compressImageToWebP } from '../lib/offlineCache';
 import { dataUrlToBlob, uploadMediaFile } from '../lib/mediaUpload';
 import { publishRunnerLocationToFirestore } from '../lib/firestoreSync';
+import { startLiveGpsWatch, type LiveGpsFix, type LiveLocationWatcher } from '../lib/geolocation';
 import { CameraCaptureModal } from './CameraCaptureModal';
 
 interface PartnerViewProps {
@@ -36,6 +37,14 @@ export const PartnerView: React.FC<PartnerViewProps> = ({
   const [otpDrafts, setOtpDrafts] = useState<Record<string, string>>({});
   const [feedback, setFeedback] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null);
   const [sirenBanner, setSirenBanner] = useState(false);
+  const [autoGpsTracking, setAutoGpsTracking] = useState(true);
+  const [liveGpsFix, setLiveGpsFix] = useState<LiveGpsFix | null>(null);
+  const [editingPartnerProfile, setEditingPartnerProfile] = useState(false);
+  const [partnerDraftName, setPartnerDraftName] = useState('');
+  const [partnerDraftPhone, setPartnerDraftPhone] = useState('');
+  const [partnerDraftDistrict, setPartnerDraftDistrict] = useState<MizoramDistrict>('Aizawl');
+  const [partnerDraftVeng, setPartnerDraftVeng] = useState('Dawrpui');
+  const gpsWatcherRef = useRef<LiveLocationWatcher | null>(null);
   const [proofCameraTarget, setProofCameraTarget] = useState<{
     jobId: string;
     stage: 'before' | 'after';
@@ -80,6 +89,100 @@ export const PartnerView: React.FC<PartnerViewProps> = ({
       void loadStrictJobs(selectedPartnerId);
     }
   }, [selectedPartnerId, partners]);
+
+  useEffect(() => {
+    if (!activePartner) return;
+    setPartnerDraftName(activePartner.name);
+    setPartnerDraftPhone(activePartner.phone);
+    setPartnerDraftDistrict(activePartner.district || 'Aizawl');
+    setPartnerDraftVeng(activePartner.veng);
+  }, [activePartner]);
+
+  const handleSavePartnerProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activePartner) return;
+    triggerHaptic('medium');
+    try {
+      const res = await fetch(`/api/auth-kyc/partner-profile/${activePartner.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: partnerDraftName,
+          phone: partnerDraftPhone,
+          district: partnerDraftDistrict,
+          veng: partnerDraftVeng,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        triggerHaptic('error');
+        setFeedback({ type: 'err', msg: data.error || 'Could not update partner profile.' });
+        return;
+      }
+      triggerHaptic('success');
+      setEditingPartnerProfile(false);
+      setFeedback({
+        type: 'ok',
+        msg:
+          lang === 'miz'
+            ? `Partner profile (${data.partner.name} · ${data.partner.veng}) update fel a ni!`
+            : `Partner profile updated (${data.partner.name} · ${data.partner.veng})!`,
+      });
+      await onRefresh();
+    } catch {
+      triggerHaptic('error');
+      setFeedback({ type: 'err', msg: 'Network error updating partner profile.' });
+    }
+  };
+
+  // Continuous Automatic GPS Coordinate Detection & 15-Second Heartbeat Sync when Partner is Online
+  useEffect(() => {
+    gpsWatcherRef.current?.stop();
+    if (!activePartner || !activePartner.online || !autoGpsTracking) return;
+
+    const pushPartnerCoords = async (lat: number, lng: number, accuracy?: number) => {
+      try {
+        const res = await fetch(`/api/errands/partners/${activePartner.id}/heartbeat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ lat, lng, online: true }),
+        });
+        if (res.ok) {
+          void publishRunnerLocationToFirestore({
+            partner: activePartner,
+            lat,
+            lng,
+            accuracyMeters: accuracy,
+          });
+        }
+      } catch {
+        // Ignore transient offline errors
+      }
+    };
+
+    gpsWatcherRef.current = startLiveGpsWatch(
+      (fix) => {
+        setLiveGpsFix(fix);
+        void pushPartnerCoords(fix.lat, fix.lng, fix.accuracyMeters);
+      },
+      () => {
+        // Fallback when running in desktop browser without GPS permission
+      },
+      { maxAutoRefineMs: 600000 }
+    );
+
+    const heartbeatTimer = setInterval(() => {
+      const lat = liveGpsFix?.lat ?? activePartner.lat;
+      const lng = liveGpsFix?.lng ?? activePartner.lng;
+      void pushPartnerCoords(lat, lng, liveGpsFix?.accuracyMeters);
+    }, 15000);
+
+    return () => {
+      gpsWatcherRef.current?.stop();
+      clearInterval(heartbeatTimer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activePartner?.id, activePartner?.online, autoGpsTracking]);
 
   const handleToggleOnline = async () => {
     if (!activePartner) return;
@@ -348,6 +451,20 @@ export const PartnerView: React.FC<PartnerViewProps> = ({
 
             <button
               type="button"
+              onClick={() => setEditingPartnerProfile((prev) => !prev)}
+              className="min-h-[44px] rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-800 hover:bg-slate-50"
+            >
+              {editingPartnerProfile
+                ? lang === 'miz'
+                  ? 'Khâr'
+                  : 'Close Edit'
+                : lang === 'miz'
+                  ? 'Ka Profile Edit'
+                  : 'Edit My Profile'}
+            </button>
+
+            <button
+              type="button"
               onClick={handleToggleOnline}
               className={`min-h-[44px] rounded-lg px-4 py-2 text-xs font-semibold text-white transition-colors ${
                 activePartner?.online ? 'bg-teal-700 hover:bg-teal-800' : 'bg-slate-600 hover:bg-slate-700'
@@ -357,6 +474,71 @@ export const PartnerView: React.FC<PartnerViewProps> = ({
             </button>
           </div>
         </div>
+
+        {editingPartnerProfile && activePartner && (
+          <form
+            onSubmit={handleSavePartnerProfile}
+            className="rounded-xl bg-teal-50/70 border border-teal-200 p-4 space-y-3"
+          >
+            <p className="text-xs font-bold text-teal-950">
+              {lang === 'miz'
+                ? 'Partner Profile Siamthatna (Hming, Phone, District & Base Veng)'
+                : 'Self-Service Partner Profile Update (Name, Phone, District & Base Veng)'}
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5">
+              <input
+                type="text"
+                required
+                value={partnerDraftName}
+                onChange={(e) => setPartnerDraftName(e.target.value)}
+                placeholder="Partner Name"
+                className="min-h-[38px] rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-900"
+              />
+              <input
+                type="text"
+                required
+                value={partnerDraftPhone}
+                onChange={(e) => setPartnerDraftPhone(e.target.value)}
+                placeholder="Phone Number"
+                className="min-h-[38px] rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-900"
+              />
+              <select
+                value={partnerDraftDistrict}
+                onChange={(e) => {
+                  const d = e.target.value as MizoramDistrict;
+                  setPartnerDraftDistrict(d);
+                  setPartnerDraftVeng(getVengsForDistrict(d)[0]?.name || d);
+                }}
+                className="min-h-[38px] rounded-lg border border-slate-300 bg-white px-2.5 text-xs font-semibold text-slate-900"
+              >
+                {ALL_MIZORAM_DISTRICT_NAMES.map((d) => (
+                  <option key={d} value={d}>
+                    {d}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={partnerDraftVeng}
+                onChange={(e) => setPartnerDraftVeng(e.target.value)}
+                className="min-h-[38px] rounded-lg border border-slate-300 bg-white px-2.5 text-xs font-semibold text-slate-900"
+              >
+                {getVengsForDistrict(partnerDraftDistrict).map((v) => (
+                  <option key={v.name} value={v.name}>
+                    {v.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                type="submit"
+                className="min-h-[36px] rounded-lg bg-teal-800 px-4 text-xs font-bold text-white hover:bg-teal-900"
+              >
+                {lang === 'miz' ? 'Partner Profile Save Rawh' : 'Save Partner Profile'}
+              </button>
+            </div>
+          </form>
+        )}
 
         {/* Capacitor/TWA Hooks & Earnings Wallet Bar */}
         {activePartner && (
@@ -398,13 +580,32 @@ export const PartnerView: React.FC<PartnerViewProps> = ({
             </div>
 
             <div className="rounded-xl bg-slate-50 p-3 flex flex-col justify-between gap-2">
-              <button
-                type="button"
-                onClick={handleBackgroundGpsPing}
-                className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-800 hover:bg-slate-100"
-              >
-                <Navigation className="w-3.5 h-3.5 text-teal-700" /> Background GPS Sync
-              </button>
+              <div className="flex items-center justify-between gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setAutoGpsTracking((prev) => !prev)}
+                  className={`flex-1 inline-flex items-center justify-center gap-1 rounded-lg px-2 py-1.5 text-[11px] font-semibold transition-colors ${
+                    autoGpsTracking
+                      ? 'bg-teal-700 text-white'
+                      : 'border border-slate-300 bg-white text-slate-700'
+                  }`}
+                >
+                  <Navigation className="w-3 h-3" />
+                  {autoGpsTracking ? 'Auto-GPS: ON' : 'Auto-GPS: OFF'}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleBackgroundGpsPing}
+                  className="inline-flex items-center justify-center gap-1 rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-[11px] font-medium text-slate-800 hover:bg-slate-100"
+                >
+                  Sync Now
+                </button>
+              </div>
+              <p className="text-[10px] font-mono text-slate-600 truncate">
+                {liveGpsFix
+                  ? `Live: ${liveGpsFix.lat.toFixed(4)}, ${liveGpsFix.lng.toFixed(4)} (±${liveGpsFix.accuracyMeters}m)`
+                  : `Pin: ${activePartner.lat.toFixed(4)}, ${activePartner.lng.toFixed(4)} · ${activePartner.veng}`}
+              </p>
               <button
                 type="button"
                 onClick={() => {
@@ -546,10 +747,10 @@ export const PartnerView: React.FC<PartnerViewProps> = ({
                   <div className="flex flex-wrap items-center gap-2">
                     <input
                       type="text"
-                      placeholder={`Customer OTP (hint: ${job.otpCode})`}
+                      placeholder="Enter 4-Digit Customer Handover OTP"
                       value={otpDrafts[job.id] || ''}
                       onChange={(e) => setOtpDrafts((p) => ({ ...p, [job.id]: e.target.value }))}
-                      className="w-48 rounded-lg border border-slate-300 px-3 py-2 text-xs font-mono"
+                      className="w-56 rounded-lg border border-slate-300 px-3 py-2 text-xs font-mono"
                     />
                     <button
                       type="button"

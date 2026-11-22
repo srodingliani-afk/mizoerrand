@@ -6,10 +6,12 @@ import {
   distanceToRouteCorridorMeters,
   evaluateSduiServiceVisibility,
   filterJobsForPartner,
+  isCustomerBlacklisted,
   isPointWithinRouteCorridor,
   validateCheckBeforePayReturn,
 } from './rules';
-import type { AppRemoteConfig, ErrandRequest, PartnerProfile } from '../../src/shared/types';
+import { MIZORAM_DISTRICTS } from '../../src/data/mizoramDistricts';
+import type { AppRemoteConfig, ErrandRequest, PartnerProfile, SystemPlugin } from '../../src/shared/types';
 
 const baseConfig: AppRemoteConfig = {
   appName: 'ZoRun',
@@ -256,4 +258,99 @@ test('District separation scopes local jobs to their District Capital while allo
     filterJobsForPartner(lungleiPickup, [interDistrictCargo]).map((j) => j.id),
     ['j-inter-1']
   );
+});
+
+test('Assigned jobs stay visible to the assigned partner and are hidden from other partners', () => {
+  const assignedToWalker: ErrandRequest = {
+    ...stepDeliveryJob,
+    id: 'j-assigned-walker',
+    status: 'assigned',
+    assignedPartnerId: walkerPartner.id,
+    paymentMethod: 'dynamic_qr_cod',
+  };
+  const secondWalker: PartnerProfile = {
+    ...walkerPartner,
+    id: 'p-walker-2',
+    name: 'Zonuna',
+  };
+  const cappedWalker: PartnerProfile = {
+    ...walkerPartner,
+    codCashHeld: 2500,
+  };
+
+  assert.deepEqual(
+    filterJobsForPartner(cappedWalker, [assignedToWalker], 2500).map((j) => j.id),
+    ['j-assigned-walker'],
+    'Assigned partner must still see their own active job even after hitting COD limit'
+  );
+  assert.equal(
+    filterJobsForPartner(secondWalker, [assignedToWalker], 2500).length,
+    0,
+    'Other partners must not see jobs already assigned to someone else'
+  );
+});
+
+test('Customer blacklist matches both customerId and customerName case-insensitively', () => {
+  const list = ['Vanlalthanga', 'cust-99'];
+  assert.equal(isCustomerBlacklisted(list, 'cust-99', 'Anyone'), true);
+  assert.equal(isCustomerBlacklisted(list, 'cust-1', 'vanlalthanga'), true);
+  assert.equal(isCustomerBlacklisted(list, 'cust-1', 'Malsawmi'), false);
+});
+
+test('All 11 Mizoram districts use official real-world MZ-01 through MZ-11 RTO codes', () => {
+  const rtoMap = Object.fromEntries(MIZORAM_DISTRICTS.map((d) => [d.district, d.rtoCode]));
+  assert.equal(rtoMap.Aizawl, 'MZ-01');
+  assert.equal(rtoMap.Lunglei, 'MZ-02');
+  assert.equal(rtoMap.Siaha, 'MZ-03');
+  assert.equal(rtoMap.Champhai, 'MZ-04');
+  assert.equal(rtoMap.Kolasib, 'MZ-05');
+  assert.equal(rtoMap.Serchhip, 'MZ-06');
+  assert.equal(rtoMap.Lawngtlai, 'MZ-07');
+  assert.equal(rtoMap.Mamit, 'MZ-08');
+  assert.equal(rtoMap.Saitual, 'MZ-09');
+  assert.equal(rtoMap.Khawzawl, 'MZ-10');
+  assert.equal(rtoMap.Hnahthial, 'MZ-11');
+});
+
+test('System plugins dynamically control Sunday Emergency Mode and Check-Before-Pay safeguards', () => {
+  const sundayConfig = { ...baseConfig, sundayEmergencyMode: true };
+  const disabledSundayPlugin: SystemPlugin[] = [
+    {
+      id: 'plg-4',
+      key: 'sunday-emergency-mode-rule',
+      name: 'Sunday Rule',
+      description: '',
+      module: 'remote-config-sdui',
+      enabled: false,
+      version: '1.0.0',
+      code: '',
+      updatedAt: new Date().toISOString(),
+    },
+  ];
+  const visWithPluginOff = evaluateSduiServiceVisibility(sundayConfig, disabledSundayPlugin);
+  assert.equal(visWithPluginOff.marketplace, true);
+  assert.equal(visWithPluginOff.sundayRestrictionActive, false);
+});
+
+test('Stationary job types (queue_standing and truck_helper) include dedicated effort surcharges over short distance', () => {
+  const shortWalkFare = calculateAllInclusiveFare({
+    category: 'walker',
+    jobType: 'hyperlocal_errand',
+    distanceKm: 0.5,
+    stopsCount: 0,
+    needsWalkerHelper: false,
+    microInsuranceOptIn: false,
+    config: baseConfig,
+  });
+  const queueStandingFare = calculateAllInclusiveFare({
+    category: 'walker',
+    jobType: 'queue_standing',
+    distanceKm: 0.5,
+    stopsCount: 0,
+    needsWalkerHelper: false,
+    microInsuranceOptIn: false,
+    config: baseConfig,
+  });
+  assert.equal(queueStandingFare.stationaryEffortRs, 80);
+  assert.equal(queueStandingFare.allInclusiveTotal - shortWalkFare.allInclusiveTotal, 80);
 });

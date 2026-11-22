@@ -263,6 +263,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
   const [locatingOriginGps, setLocatingOriginGps] = useState(false);
   const [locatingDropGps, setLocatingDropGps] = useState(false);
   const [liveUserGps, setLiveUserGps] = useState<LiveGpsFix | null>(null);
+  const [autoGpsEnabled, setAutoGpsEnabled] = useState(true);
   const [gpsStatusBanner, setGpsStatusBanner] = useState<string | null>(null);
   const [pinPickerState, setPinPickerState] = useState<{ open: boolean; mode: PinPickerMode }>({
     open: false,
@@ -270,6 +271,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
   });
   const [gateCameraOpen, setGateCameraOpen] = useState(false);
   const activeGpsWatcherRef = useRef<LiveLocationWatcher | null>(null);
+  const continuousGpsWatcherRef = useRef<LiveLocationWatcher | null>(null);
   const lastDistrictRef = useRef<MizoramDistrict>(selectedDistrict);
   const skipNextDistrictResetRef = useRef(false);
 
@@ -349,8 +351,55 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
   useEffect(() => {
     return () => {
       activeGpsWatcherRef.current?.stop();
+      continuousGpsWatcherRef.current?.stop();
     };
   }, []);
+
+  // Automatic Boot-Time & Continuous GPS Location Auto-Detection for App Users
+  useEffect(() => {
+    continuousGpsWatcherRef.current?.stop();
+    if (!autoGpsEnabled) return;
+    if (typeof navigator === 'undefined' || !navigator.geolocation) return;
+
+    continuousGpsWatcherRef.current = startLiveGpsWatch(
+      (fix) => {
+        setLiveUserGps(fix);
+        void resolveAddressFromCoords(fix.lat, fix.lng, selectedDistrict, fix.accuracyMeters).then(
+          (resolved) => {
+            if (!resolved.isOutsideMizoram && resolved.district !== selectedDistrict) {
+              skipNextDistrictResetRef.current = true;
+              onChangeDistrict(resolved.district);
+            }
+            const coordLabel = `${resolved.veng} (${resolved.lat.toFixed(4)}, ${resolved.lng.toFixed(4)})`;
+            setOriginName(resolved.veng);
+            setCustomOrigin({
+              lat: resolved.lat,
+              lng: resolved.lng,
+              label: coordLabel,
+            });
+            setPickupNearestLandmark((prev) => prev || resolved.landmark);
+            setPickupYmaSection((prev) => prev || `${resolved.zone} Zone`);
+            setSosVeng(resolved.veng);
+            setSosLiveGps({ lat: resolved.lat, lng: resolved.lng });
+            setGpsStatusBanner(
+              lang === 'miz'
+                ? `Auto-GPS: ${resolved.veng} (${resolved.district}) · ${resolved.lat.toFixed(4)}, ${resolved.lng.toFixed(4)} (±${fix.accuracyMeters}m)`
+                : `Auto-GPS: ${resolved.veng} (${resolved.district}) · ${resolved.lat.toFixed(4)}, ${resolved.lng.toFixed(4)} (±${fix.accuracyMeters}m)`
+            );
+          }
+        );
+      },
+      () => {
+        // Silent fallback if browser location permission is not yet granted
+      },
+      { maxAutoRefineMs: 600000 }
+    );
+
+    return () => {
+      continuousGpsWatcherRef.current?.stop();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoGpsEnabled]);
 
   // Subscribe to district-scoped Firestore live collections when signed in with a verified account
   useEffect(() => {
@@ -667,6 +716,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
         method: 'POST',
         headers,
         body: JSON.stringify({
+          customerName: userSettings.profile.fullName || 'Lalhriatpuii',
           title: taskTitle,
           district: selectedDistrict,
           isInterDistrict,
@@ -849,6 +899,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           workerId: worker.id,
+          customerName: userSettings.profile.fullName || 'Lalhriatpuii',
           isOutstationOrLiveIn: isLiveInOrOutstation,
           accommodationProvided: accChecked,
           foodProvided: foodChecked,
@@ -916,6 +967,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
         method: 'POST',
         headers,
         body: JSON.stringify({
+          customerName: userSettings.profile.fullName || 'Lalhriatpuii',
           district: selectedDistrict,
           veng: sosVeng,
           lat: dispatchLat,
@@ -1456,10 +1508,32 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
                                 ? 'Live GPS Lock mek...'
                                 : 'Updating Live GPS...'
                               : liveUserGps
-                                ? `Live GPS ±${liveUserGps.accuracyMeters}m`
+                                ? `GPS ${liveUserGps.lat.toFixed(4)}, ${liveUserGps.lng.toFixed(4)} · ±${liveUserGps.accuracyMeters}m`
                                 : lang === 'miz'
                                   ? 'Live GPS Auto-Fill'
                                   : 'Live GPS Auto-Fill'}
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            triggerHaptic('light');
+                            setAutoGpsEnabled((prev) => !prev);
+                          }}
+                          className={`min-h-[34px] rounded-xl backdrop-blur-xs px-3 py-1 text-[11px] font-bold inline-flex items-center gap-1.5 transition-colors ${
+                            autoGpsEnabled
+                              ? 'bg-emerald-500/30 text-emerald-100 border border-emerald-400/50'
+                              : 'bg-white/15 text-white/80 hover:bg-white/25'
+                          }`}
+                        >
+                          <span>
+                            {autoGpsEnabled
+                              ? lang === 'miz'
+                                ? 'Auto-GPS: ON'
+                                : 'Auto-GPS: ON'
+                              : lang === 'miz'
+                                ? 'Auto-GPS: OFF'
+                                : 'Auto-GPS: OFF'}
                           </span>
                         </button>
                         <button

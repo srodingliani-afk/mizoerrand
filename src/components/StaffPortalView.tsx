@@ -20,6 +20,12 @@ import type {
 } from '../shared/types';
 import { LayerWindow } from './LayerWindow';
 import { triggerHaptic } from '../lib/nativeBridge';
+import { resolveAddressFromCoords } from '../lib/geolocation';
+import {
+  ALL_MIZORAM_DISTRICT_NAMES,
+  findAnyMizoramVeng,
+  getVengsForDistrict,
+} from '../data/mizoramDistricts';
 
 type StaffPortalTab = 'assignment' | 'attendance' | 'payslips';
 
@@ -55,11 +61,72 @@ export const StaffPortalView: React.FC<StaffPortalViewProps> = ({
   const [selectedPayslip, setSelectedPayslip] = useState<PayrollRecord | null>(null);
   const [feedback, setFeedback] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [editingStaffProfile, setEditingStaffProfile] = useState(false);
+  const [staffDraftName, setStaffDraftName] = useState('');
+  const [staffDraftPhone, setStaffDraftPhone] = useState('');
+  const [staffDraftDistrict, setStaffDraftDistrict] = useState<MizoramDistrict>(selectedDistrict);
+  const [staffDraftVeng, setStaffDraftVeng] = useState('Dawrpui');
+  const [staffDraftSkills, setStaffDraftSkills] = useState('');
+  const [staffDraftStatus, setStaffDraftStatus] = useState<'active' | 'on_leave'>('active');
 
   const activeWorker = useMemo(
     () => workforce.find((w) => w.id === selectedWorkerId) || workforce[0],
     [workforce, selectedWorkerId]
   );
+
+  React.useEffect(() => {
+    if (!activeWorker) return;
+    setStaffDraftName(activeWorker.name);
+    setStaffDraftPhone(activeWorker.phone || '+91-9862001122');
+    setStaffDraftDistrict(activeWorker.district || selectedDistrict);
+    setStaffDraftVeng(activeWorker.veng);
+    setStaffDraftSkills(activeWorker.skills.join(', '));
+    setStaffDraftStatus(
+      activeWorker.availabilityStatus === 'on_leave' ? 'on_leave' : 'active'
+    );
+  }, [activeWorker, selectedDistrict]);
+
+  const handleSaveStaffProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeWorker) return;
+    setBusy(true);
+    setFeedback(null);
+    triggerHaptic('medium');
+    try {
+      const res = await fetch(`/api/auth-kyc/staff-profile/${activeWorker.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: staffDraftName,
+          phone: staffDraftPhone,
+          district: staffDraftDistrict,
+          veng: staffDraftVeng,
+          skills: staffDraftSkills
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean),
+          availabilityStatus: staffDraftStatus,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setFeedback({ type: 'err', msg: data.error || 'Could not update staff profile.' });
+        return;
+      }
+      triggerHaptic('success');
+      setEditingStaffProfile(false);
+      setFeedback({
+        type: 'ok',
+        msg:
+          lang === 'miz'
+            ? `Staff profile (${data.worker.name} · ${data.worker.veng}) update fel a ni!`
+            : `Staff profile updated (${data.worker.name} · ${data.worker.veng})!`,
+      });
+      await onRefresh();
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const myBookings = useMemo(
     () =>
@@ -97,13 +164,43 @@ export const StaffPortalView: React.FC<StaffPortalViewProps> = ({
     setFeedback(null);
     triggerHaptic('medium');
     try {
+      const detectCoords = (): Promise<{ lat: number; lng: number; accuracyMeters?: number }> =>
+        new Promise((resolve) => {
+          const fallbackPt = findAnyMizoramVeng(activeWorker.veng);
+          if (typeof navigator === 'undefined' || !navigator.geolocation) {
+            resolve({ lat: fallbackPt.lat, lng: fallbackPt.lng });
+            return;
+          }
+          navigator.geolocation.getCurrentPosition(
+            (pos) =>
+              resolve({
+                lat: pos.coords.latitude,
+                lng: pos.coords.longitude,
+                accuracyMeters: Math.round(pos.coords.accuracy),
+              }),
+            () => resolve({ lat: fallbackPt.lat, lng: fallbackPt.lng }),
+            { enableHighAccuracy: true, maximumAge: 5000, timeout: 4000 }
+          );
+        });
+
+      const coords = await detectCoords();
+      const resolvedAddr = await resolveAddressFromCoords(
+        coords.lat,
+        coords.lng,
+        activeWorker.district || selectedDistrict,
+        coords.accuracyMeters
+      );
+
       const res = await fetch('/api/staffing/attendance', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           workerId: activeWorker.id,
           status,
-          veng: activeWorker.veng,
+          veng: resolvedAddr.veng || activeWorker.veng,
+          lat: coords.lat,
+          lng: coords.lng,
+          accuracyMeters: coords.accuracyMeters,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -116,8 +213,8 @@ export const StaffPortalView: React.FC<StaffPortalViewProps> = ({
         type: 'ok',
         msg:
           lang === 'miz'
-            ? `Vawiin attendance (${status}) ${data.entry.checkInTime}-ah chhinchhiah a ni.`
-            : `Attendance logged as ${status.replace('_', ' ')} at ${data.entry.checkInTime}.`,
+            ? `Vawiin attendance (${status}) ${data.entry.checkInTime}-ah GPS (${coords.lat.toFixed(4)}, ${coords.lng.toFixed(4)} · ${data.entry.veng}) nen chhinchhiah a ni.`
+            : `Attendance logged as ${status.replace('_', ' ')} at ${data.entry.checkInTime} with GPS lock (${coords.lat.toFixed(4)}, ${coords.lng.toFixed(4)} · ${data.entry.veng}).`,
       });
       await onRefresh();
     } finally {
@@ -257,6 +354,19 @@ export const StaffPortalView: React.FC<StaffPortalViewProps> = ({
             </select>
             <button
               type="button"
+              onClick={() => setEditingStaffProfile((prev) => !prev)}
+              className="min-h-[42px] inline-flex items-center gap-1.5 rounded-xl bg-white/15 hover:bg-white/25 px-3.5 text-xs font-semibold text-white whitespace-nowrap"
+            >
+              {editingStaffProfile
+                ? lang === 'miz'
+                  ? 'Khâr'
+                  : 'Close Edit'
+                : lang === 'miz'
+                  ? 'Ka Profile Edit'
+                  : 'Edit My Profile'}
+            </button>
+            <button
+              type="button"
               onClick={onOpenApply}
               className="min-h-[42px] inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 px-3.5 text-xs font-semibold text-white whitespace-nowrap"
             >
@@ -265,6 +375,89 @@ export const StaffPortalView: React.FC<StaffPortalViewProps> = ({
             </button>
           </div>
         </div>
+
+        {editingStaffProfile && (
+          <form
+            onSubmit={handleSaveStaffProfile}
+            className="rounded-2xl bg-white/10 border border-white/20 p-4 space-y-3 text-xs"
+          >
+            <p className="font-bold text-emerald-200">
+              {lang === 'miz'
+                ? 'Ka Staff Profile Siamthatna (Hming, Phone, Veng, Thiamna & Status)'
+                : 'Self-Service Staff Profile Update (Name, Phone, Veng, Skills & Availability)'}
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+              <input
+                type="text"
+                required
+                value={staffDraftName}
+                onChange={(e) => setStaffDraftName(e.target.value)}
+                placeholder="Full Name"
+                className="min-h-[38px] rounded-xl bg-white text-slate-900 px-3 font-semibold"
+              />
+              <input
+                type="text"
+                required
+                value={staffDraftPhone}
+                onChange={(e) => setStaffDraftPhone(e.target.value)}
+                placeholder="Phone Number"
+                className="min-h-[38px] rounded-xl bg-white text-slate-900 px-3 font-semibold"
+              />
+              <select
+                value={staffDraftStatus}
+                onChange={(e) => setStaffDraftStatus(e.target.value as 'active' | 'on_leave')}
+                className="min-h-[38px] rounded-xl bg-white text-slate-900 px-3 font-semibold"
+              >
+                <option value="active">Active · Ready for Assignment</option>
+                <option value="on_leave">On Leave</option>
+              </select>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+              <select
+                value={staffDraftDistrict}
+                onChange={(e) => {
+                  const d = e.target.value as MizoramDistrict;
+                  setStaffDraftDistrict(d);
+                  setStaffDraftVeng(getVengsForDistrict(d)[0]?.name || d);
+                }}
+                className="min-h-[38px] rounded-xl bg-white text-slate-900 px-3 font-semibold"
+              >
+                {ALL_MIZORAM_DISTRICT_NAMES.map((d) => (
+                  <option key={d} value={d}>
+                    {d}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={staffDraftVeng}
+                onChange={(e) => setStaffDraftVeng(e.target.value)}
+                className="min-h-[38px] rounded-xl bg-white text-slate-900 px-3 font-semibold"
+              >
+                {getVengsForDistrict(staffDraftDistrict).map((v) => (
+                  <option key={v.name} value={v.name}>
+                    {v.name}
+                  </option>
+                ))}
+              </select>
+              <input
+                type="text"
+                value={staffDraftSkills}
+                onChange={(e) => setStaffDraftSkills(e.target.value)}
+                placeholder="Skills (comma-separated)"
+                className="min-h-[38px] rounded-xl bg-white text-slate-900 px-3 font-semibold"
+              />
+            </div>
+            <div className="flex justify-end">
+              <button
+                type="submit"
+                disabled={busy}
+                className="min-h-[36px] rounded-xl bg-emerald-400 hover:bg-emerald-300 px-4 font-extrabold text-emerald-950"
+              >
+                {lang === 'miz' ? 'Staff Profile Save Rawh' : 'Save Staff Profile'}
+              </button>
+            </div>
+          </form>
+        )}
 
         <div className="grid grid-cols-3 gap-3 pt-3 border-t border-white/15 text-xs">
           <div>
@@ -433,11 +626,14 @@ export const StaffPortalView: React.FC<StaffPortalViewProps> = ({
             <div className="pt-2 border-t border-slate-100 space-y-2">
               <p className="text-xs font-semibold text-slate-700">Recent Check-Ins</p>
               {myAttendance.slice(0, 4).map((a) => (
-                <div key={a.id} className="flex items-center justify-between text-xs">
-                  <span className="text-slate-600">
+                <div key={a.id} className="flex items-center justify-between text-xs gap-2">
+                  <span className="text-slate-600 truncate">
                     {a.date} · {a.veng}
+                    {a.gpsVerified && typeof a.lat === 'number' && typeof a.lng === 'number'
+                      ? ` · GPS (${a.lat.toFixed(4)}, ${a.lng.toFixed(4)})`
+                      : ''}
                   </span>
-                  <span className="font-mono font-semibold text-emerald-800">
+                  <span className="font-mono font-semibold text-emerald-800 shrink-0">
                     {a.checkInTime} ({a.status.replace('_', ' ')})
                   </span>
                 </div>

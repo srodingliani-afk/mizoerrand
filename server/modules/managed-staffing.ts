@@ -8,6 +8,7 @@ import {
   selectEligibleReplacements,
   validateOutstationSafeguards,
 } from '../domain/staffingRules';
+import { findNearestMizoramVeng } from '../../src/data/mizoramDistricts';
 import type {
   MizoramDistrict,
   PayrollRecord,
@@ -186,8 +187,10 @@ managedStaffingRouter.post('/book', (req, res) => {
     res.status(404).json({ error: 'Worker profile not found' });
     return;
   }
-  if (worker.availabilityStatus === 'suspended') {
-    res.status(400).json({ error: 'This worker profile is currently paused by HR.' });
+  if (worker.availabilityStatus === 'suspended' || worker.availabilityStatus === 'on_leave') {
+    res.status(400).json({
+      error: `This worker profile is currently ${worker.availabilityStatus.replace('_', ' ')} and unavailable for new bookings.`,
+    });
     return;
   }
 
@@ -319,10 +322,20 @@ managedStaffingRouter.patch('/bookings/:id', requireAdminAuth, (req, res) => {
 // STAFF PORTAL: ATTENDANCE CHECK-IN & LEAVE REQUESTS
 // =========================================================================
 managedStaffingRouter.post('/attendance', (req, res) => {
-  const { workerId, status = 'present', veng } = req.body as {
+  const {
+    workerId,
+    status = 'present',
+    veng,
+    lat,
+    lng,
+    accuracyMeters,
+  } = req.body as {
     workerId?: string;
     status?: StaffAttendanceLog['status'];
     veng?: string;
+    lat?: number;
+    lng?: number;
+    accuracyMeters?: number;
   };
   const state = db.get();
   const worker = state.workforce.find((w) => w.id === workerId);
@@ -333,6 +346,19 @@ managedStaffingRouter.post('/attendance', (req, res) => {
   const allowedStatus: StaffAttendanceLog['status'] =
     status === 'half_day' || status === 'on_leave' ? status : 'present';
 
+  const hasValidCoords =
+    typeof lat === 'number' &&
+    typeof lng === 'number' &&
+    Number.isFinite(lat) &&
+    Number.isFinite(lng);
+  const nearestMatch = hasValidCoords
+    ? findNearestMizoramVeng(lat, lng, worker.district)
+    : null;
+  const resolvedVeng =
+    nearestMatch && nearestMatch.isWithinMizoramBounds
+      ? nearestMatch.veng.name
+      : (veng || worker.veng).trim().slice(0, 60);
+
   const now = new Date();
   const entry: StaffAttendanceLog = {
     id: `att-${Date.now().toString().slice(-5)}`,
@@ -341,14 +367,25 @@ managedStaffingRouter.post('/attendance', (req, res) => {
     date: now.toISOString().slice(0, 10),
     checkInTime: now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
     status: allowedStatus,
-    veng: (veng || worker.veng).trim().slice(0, 60),
+    veng: resolvedVeng,
+    lat: hasValidCoords ? Number(lat.toFixed(6)) : undefined,
+    lng: hasValidCoords ? Number(lng.toFixed(6)) : undefined,
+    accuracyMeters:
+      typeof accuracyMeters === 'number' && Number.isFinite(accuracyMeters)
+        ? Math.max(1, Math.round(accuracyMeters))
+        : undefined,
+    gpsVerified: hasValidCoords,
   };
 
   state.staffAttendanceLogs.unshift(entry);
   if (state.staffAttendanceLogs.length > 60) {
     state.staffAttendanceLogs.length = 60;
   }
-  db.addAudit(worker.name, 'STAFF_ATTENDANCE', `${entry.date} ${entry.checkInTime} (${entry.status})`);
+  db.addAudit(
+    worker.name,
+    'STAFF_ATTENDANCE',
+    `${entry.date} ${entry.checkInTime} (${entry.status}${entry.gpsVerified ? ` · GPS ${entry.lat},${entry.lng}` : ''})`
+  );
   realtimeHub.broadcast('staffing_update', { attendance: entry });
   res.status(201).json({ entry });
 });
@@ -435,11 +472,40 @@ managedStaffingRouter.post('/payroll/generate', requireAdminAuth, (req, res) => 
   }
 
   const created: PayrollRecord[] = [];
-  const stamp = new Date().toISOString().slice(0, 7).replace('-', '');
+  const monthPrefix = new Date().toISOString().slice(0, 7);
+  const stamp = monthPrefix.replace('-', '');
 
   for (const booking of targetBookings) {
+    // Prevent duplicate monthly billing for the same staff + client household in the same YYYYMM cycle
+    const alreadyBilledThisMonth = state.payrollRecords.some(
+      (r) =>
+        r.payslipId.startsWith(`SLIP-${stamp}-`) &&
+        r.staffName.toLowerCase() === booking.workerName.toLowerCase() &&
+        r.clientName.toLowerCase() === booking.customerName.toLowerCase()
+    );
+    if (alreadyBilledThisMonth) {
+      continue;
+    }
+
     const worker = state.workforce.find((w) => w.id === booking.workerId);
-    const split = calculateManagedPayrollSplit(booking.allInclusiveAmount);
+    // Calculate pro-rata adjustment if worker had unpaid leave/half-day logs in current month without replacement
+    const monthLogs = state.staffAttendanceLogs.filter(
+      (a) => a.workerId === booking.workerId && a.date.startsWith(monthPrefix)
+    );
+    const leaveDaysEquivalent = monthLogs.reduce(
+      (acc, log) => acc + (log.status === 'on_leave' ? 1 : log.status === 'half_day' ? 0.5 : 0),
+      0
+    );
+    const unpaidLeaveDays = booking.replacementWorkerId
+      ? 0
+      : Math.max(0, leaveDaysEquivalent - 2); // 2 paid leave days included per month
+    const dailyEquivalent = Math.round(booking.allInclusiveAmount / 30);
+    const adjustedPackage = Math.max(
+      4000,
+      Math.round(booking.allInclusiveAmount - unpaidLeaveDays * dailyEquivalent)
+    );
+
+    const split = calculateManagedPayrollSplit(adjustedPackage);
     const seq = `${state.payrollRecords.length + created.length + 1}`.padStart(2, '0');
     const record: PayrollRecord = {
       id: `pay-${Date.now().toString().slice(-5)}-${seq}`,
@@ -458,6 +524,13 @@ managedStaffingRouter.post('/payroll/generate', requireAdminAuth, (req, res) => 
     created.push(record);
   }
 
+  if (created.length === 0) {
+    res.status(400).json({
+      error: `Monthly payroll for cycle ${monthPrefix} has already been generated for all active contracts.`,
+    });
+    return;
+  }
+
   db.addAudit('hr-payroll', 'PAYROLL_CYCLE_GENERATED', `Generated ${created.length} monthly payroll record(s)`);
   realtimeHub.broadcast('staffing_update', { payrollGenerated: created.length });
   res.status(201).json({ created });
@@ -468,6 +541,10 @@ managedStaffingRouter.post('/payroll/:id/disburse', requireAdminAuth, (req, res)
   const record = state.payrollRecords.find((p) => p.id === req.params.id);
   if (!record) {
     res.status(404).json({ error: 'Payroll record not found' });
+    return;
+  }
+  if (record.status === 'salary_disbursed') {
+    res.status(400).json({ error: 'Salary has already been disbursed for this payslip.' });
     return;
   }
   record.status = 'salary_disbursed';

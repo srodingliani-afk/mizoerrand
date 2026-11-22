@@ -10,6 +10,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import type { AppRemoteConfig, SystemPlugin } from '../shared/types';
+import { MasterSystemControlPanel } from './MasterSystemControlPanel';
 
 interface DevStudioViewProps {
   adminToken: string;
@@ -334,7 +335,17 @@ export const DevStudioView: React.FC<DevStudioViewProps> = ({
   };
 
   return (
-    <div className="rounded-2xl bg-slate-950 text-slate-100 border border-slate-800 overflow-hidden mb-16 md:mb-4">
+    <div className="space-y-6 mb-16 md:mb-4">
+      <MasterSystemControlPanel
+        adminToken={adminToken}
+        onAuthExpired={onAuthExpired}
+        onLiveUpdated={async () => {
+          await loadWorkspace();
+          await onLiveUpdated();
+        }}
+      />
+
+      <div className="rounded-2xl bg-slate-950 text-slate-100 border border-slate-800 overflow-hidden">
       {/* Studio Top Bar */}
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 bg-slate-900 px-4 py-3">
         <div>
@@ -562,6 +573,7 @@ export const DevStudioView: React.FC<DevStudioViewProps> = ({
             </button>
           </form>
         </section>
+      </div>
       </div>
     </div>
   );

@@ -130,7 +130,7 @@ async function startServer() {
       mapsApiKey,
       sdui: {
         config: state.remoteConfig,
-        effectiveVisibility: evaluateSduiServiceVisibility(state.remoteConfig),
+        effectiveVisibility: evaluateSduiServiceVisibility(state.remoteConfig, state.plugins),
       },
       partners: state.partners,
       jobs: state.errands,

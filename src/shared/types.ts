@@ -231,8 +231,14 @@ export interface SumoParcelBooking {
   parcelDescription: string;
   shoppingMarket?: string;
   estimatedItemBudgetRs?: number;
+  actualItemBillRs?: number;
+  billReconciledDeltaRs?: number;
   proxyShoppingFeeRs?: number;
   receiptPhotoUrl?: string;
+  assignedRunnerId?: string;
+  assignedRunnerName?: string;
+  sumoVehicleNumber?: string;
+  paidViaWallet?: boolean;
   weightKg: number;
   includeHomeDrop: boolean;
   allInclusiveTotal: number;
@@ -275,6 +281,9 @@ export interface MarketplaceOrder {
   hygieneCategory: HygieneCategory;
   returnFeeOnReject: number;
   status: 'awaiting_inspection' | 'accepted_paid' | 'rejected_return_fee_charged';
+  assignedPartnerId?: string;
+  assignedPartnerName?: string;
+  paidViaWallet?: boolean;
   voiceNoteUrl?: string;
   voiceNoteDurationSec?: number;
   voiceNoteTranscript?: string;
@@ -354,6 +363,10 @@ export interface StaffAttendanceLog {
   checkInTime: string;
   status: 'present' | 'half_day' | 'on_leave';
   veng: string;
+  lat?: number;
+  lng?: number;
+  accuracyMeters?: number;
+  gpsVerified?: boolean;
 }
 
 export interface PayrollRecord {
