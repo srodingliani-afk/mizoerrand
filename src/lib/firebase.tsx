@@ -194,8 +194,10 @@ interface FirebaseAuthContextValue {
 const FirebaseAuthContext = createContext<FirebaseAuthContextValue | null>(null);
 
 const GOOGLE_WORKSPACE_SCOPES = [
-  // Google Drive (Voice notes, Receipts, KYC)
+  // Google Drive (Voice notes, Receipts, KYC, Spreadsheet discovery)
+  'https://www.googleapis.com/auth/drive',
   'https://www.googleapis.com/auth/drive.file',
+  'https://www.googleapis.com/auth/drive.readonly',
   'https://www.googleapis.com/auth/drive.metadata.readonly',
   // Gmail
   'https://www.googleapis.com/auth/gmail.readonly',
@@ -215,6 +217,34 @@ const GOOGLE_WORKSPACE_SCOPES = [
   'https://www.googleapis.com/auth/meetings.space.created',
   'https://www.googleapis.com/auth/meetings.space.readonly',
   'https://www.googleapis.com/auth/meetings.space.settings',
+  // Google Sheets
+  'https://www.googleapis.com/auth/spreadsheets',
+  'https://www.googleapis.com/auth/spreadsheets.readonly',
+  // Google Classroom
+  'https://www.googleapis.com/auth/classroom.addons.student',
+  'https://www.googleapis.com/auth/classroom.addons.teacher',
+  'https://www.googleapis.com/auth/classroom.announcements',
+  'https://www.googleapis.com/auth/classroom.announcements.readonly',
+  'https://www.googleapis.com/auth/classroom.courses',
+  'https://www.googleapis.com/auth/classroom.courses.readonly',
+  'https://www.googleapis.com/auth/classroom.coursework.me',
+  'https://www.googleapis.com/auth/classroom.coursework.me.readonly',
+  'https://www.googleapis.com/auth/classroom.coursework.students',
+  'https://www.googleapis.com/auth/classroom.coursework.students.readonly',
+  'https://www.googleapis.com/auth/classroom.courseworkmaterials',
+  'https://www.googleapis.com/auth/classroom.courseworkmaterials.readonly',
+  'https://www.googleapis.com/auth/classroom.guardianlinks.me.readonly',
+  'https://www.googleapis.com/auth/classroom.guardianlinks.students',
+  'https://www.googleapis.com/auth/classroom.guardianlinks.students.readonly',
+  'https://www.googleapis.com/auth/classroom.profile.emails',
+  'https://www.googleapis.com/auth/classroom.profile.photos',
+  'https://www.googleapis.com/auth/classroom.push-notifications',
+  'https://www.googleapis.com/auth/classroom.rosters',
+  'https://www.googleapis.com/auth/classroom.rosters.readonly',
+  'https://www.googleapis.com/auth/classroom.student-submissions.me.readonly',
+  'https://www.googleapis.com/auth/classroom.student-submissions.students.readonly',
+  'https://www.googleapis.com/auth/classroom.topics',
+  'https://www.googleapis.com/auth/classroom.topics.readonly',
 ];
 
 export const FirebaseProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {

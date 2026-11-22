@@ -1850,12 +1850,12 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
                   </div>
                   <div className="min-w-0">
                     <p className="text-sm font-bold text-slate-900 dark:text-slate-100 truncate">
-                      {lang === 'miz' ? 'Gmail, Chat & Google Meet' : 'Gmail, Chat & Meet Hub'}
+                      {lang === 'miz' ? 'Google Workspace Hub' : 'Google Workspace Hub'}
                     </p>
                     <p className="text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5">
                       {lang === 'miz'
-                        ? 'Order receipt thawn, Chat & Awmpui Video Call'
-                        : 'Receipts via Gmail · Support Chat · Meet Video'}
+                        ? 'Gmail, Chat, Meet, Sheets Ledger & Classroom'
+                        : 'Gmail · Chat · Meet · Sheets · Classroom'}
                     </p>
                   </div>
                 </div>
@@ -4117,7 +4117,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
         onBooked={onRefresh}
       />
 
-      {/* LAYER 1: GOOGLE WORKSPACE COMMS HUB (GMAIL, CHAT & MEET) */}
+      {/* LAYER 1: GOOGLE WORKSPACE HUB (GMAIL, CHAT, MEET, SHEETS & CLASSROOM) */}
       <WorkspaceCommsWindow
         open={workspaceLayerOpen}
         onClose={() => setWorkspaceLayerOpen(false)}
@@ -4125,6 +4125,8 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
         selectedDistrict={selectedDistrict}
         latestErrand={latestErrand}
         latestOrder={orders[0] || null}
+        allErrands={districtErrands}
+        allOrders={orders}
       />
 
       {/* LAYER 2: COMPREHENSIVE FULL-DETAIL INSPECTION WINDOWS */}

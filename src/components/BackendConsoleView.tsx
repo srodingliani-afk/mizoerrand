@@ -367,7 +367,7 @@ export const BackendConsoleView: React.FC<BackendConsoleViewProps> = ({
                 </h2>
                 <span className="text-[11px] font-mono text-slate-600">
                   {statusData.driveStorage.tokenActive
-                    ? `Gmail · Chat · Meet · Drive (${statusData.driveStorage.latencyMs ?? 0}ms)`
+                    ? `Workspace + Sheets + Classroom (${statusData.driveStorage.latencyMs ?? 0}ms)`
                     : 'Sign in w/ Google to activate Workspace'}
                 </span>
               </div>
