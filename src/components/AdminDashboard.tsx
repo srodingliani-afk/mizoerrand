@@ -1,10 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import {
   AlertTriangle,
+  Bot,
+  Camera,
   FileCheck2,
   Lock,
   Receipt,
   ShieldAlert,
+  Video,
 } from 'lucide-react';
 import type {
   AppRemoteConfig,
@@ -28,6 +31,7 @@ import { ALL_MIZORAM_DISTRICT_NAMES, MIZORAM_DISTRICTS, getDistrictInfo } from '
 import { MizoramMap } from './MizoramMap';
 import { AdminStaffingConsole } from './AdminStaffingConsole';
 import { MasterSystemControlPanel } from './MasterSystemControlPanel';
+import { LiveVideoInterviewModal } from './LiveVideoInterviewModal';
 import { triggerHaptic } from '../lib/nativeBridge';
 
 type AdminRole = 'Super Admin' | 'Operations Lead' | 'KYC & HR Officer' | 'Finance & Payroll';
@@ -81,6 +85,38 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [badgeSelection, setBadgeSelection] = useState<Record<string, TrustBadge>>({});
   const [signedCheckMsg, setSignedCheckMsg] = useState<string | null>(null);
   const [actionStatus, setActionStatus] = useState<string | null>(null);
+  const [activeVideoKycItem, setActiveVideoKycItem] = useState<KycQueueItem | null>(null);
+
+  const handleVideoInterviewAction = async (
+    kycId: string,
+    action: 'require_or_schedule' | 'open_live_room' | 'complete_passed' | 'complete_failed' | 'waive'
+  ) => {
+    triggerHaptic('medium');
+    try {
+      const res = await fetch(`/api/auth-kyc/video-interview/${kycId}`, {
+        method: 'POST',
+        headers: authHeaders(true),
+        body: JSON.stringify({
+          action,
+          interviewerName: `${role} Officer`,
+          interviewScore: 95,
+        }),
+      });
+      if (res.status === 401) {
+        onAuthExpired();
+        return;
+      }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setActionStatus(data.error || 'Could not update video interview status.');
+        return;
+      }
+      setActionStatus(`KYC ${kycId} Live Video Interview -> ${data.item?.videoInterview?.status}`);
+      await fetchAdminDetails();
+    } catch {
+      setActionStatus('Network error updating live video interview.');
+    }
+  };
 
   const authHeaders = (withJson = false): Record<string, string> =>
     withJson
@@ -579,28 +615,127 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </p>
           )}
           <div className="rounded-2xl border border-slate-200 bg-white p-5 space-y-4">
-            <h2 className="text-base font-semibold text-slate-900">
-              KYC, Police Verification &amp; YMA/VC Reference Queue ({visibleKycQueue.length})
-            </h2>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h2 className="text-base font-semibold text-slate-900">
+                  Camera AI OCR KYC, Live Video Interview &amp; Server Staff Verification Queue ({visibleKycQueue.length})
+                </h2>
+                <p className="text-xs text-slate-500">
+                  Phone Camera-Only Capture · Full 12-Digit Aadhaar AI OCR Auto-Masked · In-App WebRTC Video Interview for Awmpui &amp; Drivers
+                </p>
+              </div>
+            </div>
             <div className="space-y-4">
-              {visibleKycQueue.map((item) => (
+              {visibleKycQueue.map((item) => {
+                const vid = item.videoInterview;
+                const videoBlockingApproval =
+                  vid?.required &&
+                  vid.status !== 'completed_passed' &&
+                  vid.status !== 'waived_by_staff';
+                return (
                 <div key={item.id} className="rounded-xl border border-slate-200 p-4 space-y-3">
                   <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                      <p className="text-xs font-mono text-slate-500">
-                        {item.id} · {item.targetCategory.toUpperCase()} · {item.veng} ({item.district || 'Aizawl'}) · Score {item.practicalTestScore}/100
-                      </p>
+                    <div className="space-y-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="text-xs font-mono text-slate-500">
+                          {item.id} · {item.targetCategory.toUpperCase()} · {item.veng} ({item.district || 'Aizawl'}) · Score {item.practicalTestScore}/100
+                        </p>
+                        <span
+                          className={`rounded-md px-2 py-0.5 text-[10px] font-bold uppercase ${
+                            item.requestType === 'partner_doc_update' || item.requestType === 'staff_doc_update'
+                              ? 'bg-amber-100 text-amber-900'
+                              : 'bg-emerald-100 text-emerald-900'
+                          }`}
+                        >
+                          {item.requestType === 'partner_doc_update'
+                            ? `Partner Doc Update (${item.targetEntityId})`
+                            : item.requestType === 'staff_doc_update'
+                              ? `Staff Doc Update (${item.targetEntityId})`
+                              : 'New Onboarding'}
+                        </span>
+                        {item.cameraCaptureVerified && (
+                          <span className="inline-flex items-center gap-1 rounded-md bg-teal-100 px-2 py-0.5 text-[10px] font-bold text-teal-900">
+                            <Camera className="w-3 h-3" /> Live Phone Camera Verified
+                          </span>
+                        )}
+                      </div>
                       <h3 className="text-base font-semibold text-slate-900">{item.applicantName}</h3>
-                      <p className="text-xs text-slate-600 mt-1">
-                        Aadhaar {item.aadhaarMasked} · Voter {item.voterIdNumber}
+                      <p className="text-xs text-slate-600">
+                        Aadhaar {item.aadhaarMasked}{' '}
+                        {item.aadhaarFull12Validated ? '(12-Digit UIDAI AI Verified)' : ''} · Voter {item.voterIdNumber}
                         {item.drivingLicenceNumber ? ` · DL ${item.drivingLicenceNumber}` : ''}
                         {item.commercialPermitNumber ? ` · Permit ${item.commercialPermitNumber}` : ''}
                         {item.vehicleRcNumber ? ` · RC ${item.vehicleRcNumber}` : ''}
                       </p>
-                      <p className="text-xs text-teal-800 mt-0.5">
+                      <p className="text-xs text-teal-800">
                         PVC: {item.pvcNumber || 'Pending'} · Local Ref: {item.ymaVcReference}
                       </p>
-                      <p className="text-xs text-slate-500 mt-0.5">Resume: {item.resumeSummary}</p>
+                      <p className="text-xs text-slate-500">Resume: {item.resumeSummary}</p>
+
+                      {item.aiOcrReport && (
+                        <div className="mt-2 rounded-lg bg-slate-50 border border-slate-200 p-2.5 text-[11px] text-slate-700 space-y-0.5">
+                          <p className="font-bold text-slate-900 flex items-center gap-1.5">
+                            <Bot className="w-3.5 h-3.5 text-teal-700" />
+                            AI Agent OCR Report · Confidence {item.aiOcrReport.aiConfidenceScore}% ·{' '}
+                            {item.aiOcrReport.aiModelUsed} · {item.aiOcrReport.aadhaarVerificationHash}
+                          </p>
+                          <p>{item.aiOcrReport.aiSummary}</p>
+                        </div>
+                      )}
+
+                      {/* Live Video Interview Status & Server-Side Staff Controls */}
+                      <div className="mt-2 rounded-xl bg-teal-50/70 border border-teal-200 p-3 flex flex-wrap items-center justify-between gap-2 text-xs">
+                        <div>
+                          <p className="font-bold text-teal-950 flex items-center gap-1.5">
+                            <Video className="w-3.5 h-3.5 text-teal-700" />
+                            In-App Live Video Interview:{' '}
+                            <span className="uppercase font-mono text-teal-800">
+                              {vid ? vid.status.replace(/_/g, ' ') : 'optional'}
+                            </span>
+                            {vid?.interviewScore ? ` (${vid.interviewScore}/100)` : ''}
+                          </p>
+                          <p className="text-[11px] text-slate-600">
+                            {vid?.interviewerNotes ||
+                              'Server-side staff discretion: Launch live video call, mark passed, or waive interview.'}
+                          </p>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setActiveVideoKycItem(item)}
+                            className="inline-flex items-center gap-1 rounded-lg bg-teal-800 hover:bg-teal-900 px-3 py-1.5 text-xs font-bold text-white"
+                          >
+                            <Video className="w-3.5 h-3.5" /> Launch Live Video Call
+                          </button>
+                          {vid?.status !== 'completed_passed' && (
+                            <button
+                              type="button"
+                              onClick={() => void handleVideoInterviewAction(item.id, 'complete_passed')}
+                              className="rounded-lg border border-emerald-400 bg-emerald-50 hover:bg-emerald-100 px-2.5 py-1.5 text-[11px] font-bold text-emerald-900"
+                            >
+                              Pass Video
+                            </button>
+                          )}
+                          {vid?.required && vid.status !== 'waived_by_staff' && (
+                            <button
+                              type="button"
+                              onClick={() => void handleVideoInterviewAction(item.id, 'waive')}
+                              className="rounded-lg border border-amber-300 bg-amber-50 hover:bg-amber-100 px-2.5 py-1.5 text-[11px] font-bold text-amber-900"
+                            >
+                              Waive (Staff Choice)
+                            </button>
+                          )}
+                          {!vid?.required && (
+                            <button
+                              type="button"
+                              onClick={() => void handleVideoInterviewAction(item.id, 'require_or_schedule')}
+                              className="rounded-lg border border-slate-300 bg-white hover:bg-slate-50 px-2.5 py-1.5 text-[11px] font-semibold text-slate-700"
+                            >
+                              Require Video
+                            </button>
+                          )}
+                        </div>
+                      </div>
                     </div>
 
                     <div className="flex flex-wrap items-center gap-2">
@@ -630,9 +765,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           <button
                             type="button"
                             onClick={() => handleKycDecision(item.id, 'approved')}
-                            className="rounded-lg bg-teal-700 px-3 py-1.5 text-xs font-semibold text-white"
+                            title={
+                              videoBlockingApproval
+                                ? 'Pass or Waive Live Video Interview first'
+                                : 'Verify & Approve KYC'
+                            }
+                            className={`rounded-lg px-3 py-1.5 text-xs font-semibold text-white ${
+                              videoBlockingApproval
+                                ? 'bg-slate-500 hover:bg-slate-600'
+                                : 'bg-teal-700 hover:bg-teal-800'
+                            }`}
                           >
-                            Approve
+                            Verify &amp; Approve
                           </button>
                           <button
                             type="button"
@@ -650,7 +794,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </div>
                   </div>
                 </div>
-              ))}
+              );
+              })}
             </div>
           </div>
 
@@ -860,6 +1005,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
         </div>
       )}
+
+      <LiveVideoInterviewModal
+        open={Boolean(activeVideoKycItem)}
+        onClose={() => setActiveVideoKycItem(null)}
+        lang={lang}
+        kycItem={activeVideoKycItem}
+        isServerStaff={true}
+        adminToken={adminToken}
+        onUpdated={async () => {
+          await fetchAdminDetails();
+          await onRefresh();
+        }}
+      />
     </div>
   );
 };

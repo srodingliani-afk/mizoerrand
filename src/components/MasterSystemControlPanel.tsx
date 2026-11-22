@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   AlertTriangle,
+  Bot,
   CheckCircle2,
   KeyRound,
   Plus,
@@ -12,6 +13,7 @@ import {
   Trash2,
   Truck,
   Users,
+  Video,
   Wallet,
 } from 'lucide-react';
 import type {
@@ -24,6 +26,7 @@ import type {
   PartnerCategory,
   PartnerProfile,
   SumoParcelBooking,
+  SystemIntegrationConfig,
 } from '../shared/types';
 import { ALL_MIZORAM_DISTRICT_NAMES, getDistrictInfo } from '../data/mizoramDistricts';
 
@@ -33,6 +36,7 @@ type ControlSection =
   | 'errands_sumo'
   | 'marketplace'
   | 'wallet_blacklist'
+  | 'integrations_kyc_video'
   | 'security';
 
 interface MasterSystemControlPanelProps {
@@ -68,6 +72,7 @@ export const MasterSystemControlPanel: React.FC<MasterSystemControlPanelProps> =
   const [blacklistedCustomers, setBlacklistedCustomers] = useState<string[]>([]);
   const [userMonthlyReturns, setUserMonthlyReturns] = useState<Record<string, number>>({});
   const [walletDraft, setWalletDraft] = useState<CustomerWalletState | null>(null);
+  const [integrationDraft, setIntegrationDraft] = useState<SystemIntegrationConfig | null>(null);
 
   // New Partner Form
   const [newPartnerName, setNewPartnerName] = useState('');
@@ -112,6 +117,7 @@ export const MasterSystemControlPanel: React.FC<MasterSystemControlPanelProps> =
       setBlacklistedCustomers(data.blacklistedCustomers || []);
       setUserMonthlyReturns(data.userMonthlyReturns || {});
       setWalletDraft(data.customerWallet || null);
+      setIntegrationDraft(data.integrationConfig || null);
     } catch {
       setFeedback({ type: 'err', msg: 'Could not load master system state.' });
     } finally {
@@ -343,6 +349,30 @@ export const MasterSystemControlPanel: React.FC<MasterSystemControlPanelProps> =
     }
   };
 
+  const handleSaveIntegrationConfig = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!integrationDraft) return;
+    const res = await fetch('/api/dev-studio/integrations', {
+      method: 'PUT',
+      headers: authHeaders(true),
+      body: JSON.stringify(integrationDraft),
+    });
+    if (res.status === 401) {
+      onAuthExpired();
+      return;
+    }
+    if (res.ok) {
+      setFeedback({
+        type: 'ok',
+        msg: 'AI KYC Vision OCR Agent & Live Video Interview WebRTC configuration saved live!',
+      });
+      await loadMasterState();
+      await onLiveUpdated();
+    } else {
+      setFeedback({ type: 'err', msg: 'Could not save integration configuration.' });
+    }
+  };
+
   const handleRotatePasscode = async (e: React.FormEvent) => {
     e.preventDefault();
     if (newPasscode.trim().length < 6) {
@@ -441,7 +471,8 @@ export const MasterSystemControlPanel: React.FC<MasterSystemControlPanelProps> =
             ['errands_sumo', `3. Errands (${errands.length}) & Sumo (${sumoParcels.length})`, Users],
             ['marketplace', `4. Products (${products.length}) & Orders (${marketplaceOrders.length})`, Store],
             ['wallet_blacklist', `5. Wallet & Blacklist (${blacklistedCustomers.length})`, Wallet],
-            ['security', '6. Admin Security & Passcode', KeyRound],
+            ['integrations_kyc_video', '6. AI KYC & Live Video API Keys', Video],
+            ['security', '7. Admin Security & Passcode', KeyRound],
           ] as const
         ).map(([key, label, Icon]) => (
           <button
@@ -1495,7 +1526,244 @@ export const MasterSystemControlPanel: React.FC<MasterSystemControlPanelProps> =
         </div>
       )}
 
-      {/* SECTION 6: SUPER ADMIN SECURITY & PASSCODE ROTATION */}
+      {/* SECTION 6: AI KYC VISION OCR AGENT & LIVE VIDEO INTERVIEW WEBRTC CONFIG */}
+      {section === 'integrations_kyc_video' && integrationDraft && (
+        <form onSubmit={handleSaveIntegrationConfig} className="space-y-5">
+          <div className="rounded-xl border border-teal-300 bg-teal-50/80 p-4 text-xs text-teal-950 space-y-1">
+            <p className="font-bold flex items-center gap-1.5">
+              <Bot className="w-4 h-4 text-teal-700" />
+              AI Camera KYC OCR Agent &amp; In-App Live Video Interview Extension Manager
+            </p>
+            <p>
+              Manage Gemini Vision API keys, enforce strict Phone-Camera-Only KYC document capture, require full 12-digit UIDAI Aadhaar AI scan (auto-masked to <code>XXXX-XXXX-1234</code>), and configure the embedded WebRTC Live Video Interview module (Jitsi Meet, Daily.co, LiveKit Cloud, or Agora RTC) for Awmpui &amp; Drivers.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+            {/* Left Card: AI KYC Vision & Camera-Only Policy */}
+            <div className="rounded-2xl border border-slate-200 p-4 space-y-3.5">
+              <h3 className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
+                <Bot className="w-4 h-4 text-emerald-700" />
+                1. AI KYC Vision OCR Agent &amp; Camera-Only Policy
+              </h3>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Gemini Vision API Key (GEMINI_API_KEY Override)
+                </label>
+                <input
+                  type="password"
+                  value={integrationDraft.geminiApiKey}
+                  onChange={(e) =>
+                    setIntegrationDraft({ ...integrationDraft, geminiApiKey: e.target.value })
+                  }
+                  placeholder="AIzaSy... (Leave blank to use server env or built-in deterministic AI OCR)"
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs font-mono"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    AI Vision Model
+                  </label>
+                  <input
+                    type="text"
+                    value={integrationDraft.geminiModel}
+                    onChange={(e) =>
+                      setIntegrationDraft({ ...integrationDraft, geminiModel: e.target.value })
+                    }
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Min AI OCR Confidence (%)
+                  </label>
+                  <input
+                    type="number"
+                    min={50}
+                    max={99}
+                    value={integrationDraft.aiOcrMinConfidence}
+                    onChange={(e) =>
+                      setIntegrationDraft({
+                        ...integrationDraft,
+                        aiOcrMinConfidence: Number(e.target.value) || 82,
+                      })
+                    }
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs font-mono"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2 pt-1 text-xs">
+                <label className="flex items-center gap-2 font-medium text-slate-800 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={integrationDraft.enforceCameraOnlyKyc}
+                    onChange={(e) =>
+                      setIntegrationDraft({
+                        ...integrationDraft,
+                        enforceCameraOnlyKyc: e.target.checked,
+                      })
+                    }
+                  />
+                  Enforce Strict Phone-Camera-Only KYC Capture (Block Gallery Upload &amp; Manual Typing)
+                </label>
+
+                <label className="flex items-center gap-2 font-medium text-slate-800 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={integrationDraft.requireFull12DigitAadhaarScan}
+                    onChange={(e) =>
+                      setIntegrationDraft({
+                        ...integrationDraft,
+                        requireFull12DigitAadhaarScan: e.target.checked,
+                      })
+                    }
+                  />
+                  Require Full 12-Digit UIDAI Aadhaar AI Scan + SHA-256 Hash + Auto-Mask (XXXX-XXXX-1234)
+                </label>
+
+                <label className="flex items-center gap-2 font-medium text-slate-800 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={integrationDraft.requireServerStaffVerificationForUpdates}
+                    onChange={(e) =>
+                      setIntegrationDraft({
+                        ...integrationDraft,
+                        requireServerStaffVerificationForUpdates: e.target.checked,
+                      })
+                    }
+                  />
+                  Route All Partner &amp; Staff Profile/Document Updates to Server-Side Staff Verification Queue
+                </label>
+              </div>
+            </div>
+
+            {/* Right Card: In-App Live Video Interview WebRTC Module */}
+            <div className="rounded-2xl border border-slate-200 p-4 space-y-3.5">
+              <h3 className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
+                <Video className="w-4 h-4 text-teal-700" />
+                2. In-App Live Video Interview WebRTC Extension &amp; API Keys
+              </h3>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Video WebRTC Provider
+                  </label>
+                  <select
+                    value={integrationDraft.videoProvider}
+                    onChange={(e) =>
+                      setIntegrationDraft({
+                        ...integrationDraft,
+                        videoProvider: e.target.value as SystemIntegrationConfig['videoProvider'],
+                      })
+                    }
+                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold"
+                  >
+                    <option value="jitsi_webrtc">Jitsi Meet WebRTC (Zero-Key Out-of-Box)</option>
+                    <option value="daily_co">Daily.co WebRTC Cloud</option>
+                    <option value="livekit_cloud">LiveKit Cloud SFU</option>
+                    <option value="agora_rtc">Agora SD-RTN</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Video Server Domain / Endpoint
+                  </label>
+                  <input
+                    type="text"
+                    value={integrationDraft.videoServerDomain}
+                    onChange={(e) =>
+                      setIntegrationDraft({
+                        ...integrationDraft,
+                        videoServerDomain: e.target.value,
+                      })
+                    }
+                    placeholder="https://meet.jit.si"
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs font-mono"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Video API Key / App ID (Daily / LiveKit / Agora)
+                  </label>
+                  <input
+                    type="password"
+                    value={integrationDraft.videoApiKey}
+                    onChange={(e) =>
+                      setIntegrationDraft({ ...integrationDraft, videoApiKey: e.target.value })
+                    }
+                    placeholder="Optional for Jitsi; required for Daily/LiveKit/Agora"
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Video API Secret / Signing Token
+                  </label>
+                  <input
+                    type="password"
+                    value={integrationDraft.videoApiSecret}
+                    onChange={(e) =>
+                      setIntegrationDraft({ ...integrationDraft, videoApiSecret: e.target.value })
+                    }
+                    placeholder="Room token signing secret"
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs font-mono"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Encrypted Room Prefix
+                </label>
+                <input
+                  type="text"
+                  value={integrationDraft.roomPrefix}
+                  onChange={(e) =>
+                    setIntegrationDraft({ ...integrationDraft, roomPrefix: e.target.value })
+                  }
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs font-mono"
+                />
+              </div>
+
+              <label className="flex items-center gap-2 pt-1 text-xs font-medium text-slate-800 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={integrationDraft.defaultRequireVideoForAwmpuiAndDrivers}
+                  onChange={(e) =>
+                    setIntegrationDraft({
+                      ...integrationDraft,
+                      defaultRequireVideoForAwmpuiAndDrivers: e.target.checked,
+                    })
+                  }
+                />
+                Default Require Live Video Interview for Awmpui &amp; Drivers (Server Staff Can Still Waive or Schedule at Their Discretion)
+              </label>
+            </div>
+          </div>
+
+          <div className="flex justify-end">
+            <button
+              type="submit"
+              className="inline-flex items-center gap-1.5 rounded-xl bg-teal-800 hover:bg-teal-900 px-5 py-2.5 text-xs font-bold text-white shadow-sm"
+            >
+              <Save className="w-4 h-4" />
+              Save AI KYC &amp; Live Video Interview Config
+            </button>
+          </div>
+        </form>
+      )}
+
+      {/* SECTION 7: SUPER ADMIN SECURITY & PASSCODE ROTATION */}
       {section === 'security' && (
         <div className="max-w-lg space-y-4">
           <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-xs text-amber-950 space-y-1">

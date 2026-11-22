@@ -1,6 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { BellRing, Camera, CheckCircle2, Navigation, Radio, Wallet } from 'lucide-react';
-import type { AppRemoteConfig, ErrandRequest, Language, MizoramDistrict, PartnerProfile } from '../shared/types';
+import { BellRing, Bot, Camera, CheckCircle2, Navigation, Radio, Video, Wallet } from 'lucide-react';
+import type {
+  AppRemoteConfig,
+  ErrandRequest,
+  KycAiOcrExtraction,
+  KycQueueItem,
+  Language,
+  MizoramDistrict,
+  PartnerProfile,
+} from '../shared/types';
 import { TRANSLATIONS } from '../i18n/translations';
 import { ALL_MIZORAM_DISTRICT_NAMES, getVengsForDistrict } from '../data/mizoramDistricts';
 import {
@@ -12,7 +20,8 @@ import { compressImageToWebP } from '../lib/offlineCache';
 import { dataUrlToBlob, uploadMediaFile } from '../lib/mediaUpload';
 import { publishRunnerLocationToFirestore } from '../lib/firestoreSync';
 import { startLiveGpsWatch, type LiveGpsFix, type LiveLocationWatcher } from '../lib/geolocation';
-import { CameraCaptureModal } from './CameraCaptureModal';
+import { CameraCaptureModal, type CameraCaptureResult } from './CameraCaptureModal';
+import { LiveVideoInterviewModal } from './LiveVideoInterviewModal';
 
 interface PartnerViewProps {
   lang: Language;
@@ -44,6 +53,11 @@ export const PartnerView: React.FC<PartnerViewProps> = ({
   const [partnerDraftPhone, setPartnerDraftPhone] = useState('');
   const [partnerDraftDistrict, setPartnerDraftDistrict] = useState<MizoramDistrict>('Aizawl');
   const [partnerDraftVeng, setPartnerDraftVeng] = useState('Dawrpui');
+  const [partnerKycCameraOpen, setPartnerKycCameraOpen] = useState(false);
+  const [partnerAiOcr, setPartnerAiOcr] = useState<KycAiOcrExtraction | null>(null);
+  const [partnerKycDocPath, setPartnerKycDocPath] = useState<string>('');
+  const [queuedPartnerKycItem, setQueuedPartnerKycItem] = useState<KycQueueItem | null>(null);
+  const [partnerVideoModalOpen, setPartnerVideoModalOpen] = useState(false);
   const gpsWatcherRef = useRef<LiveLocationWatcher | null>(null);
   const [proofCameraTarget, setProofCameraTarget] = useState<{
     jobId: string;
@@ -96,11 +110,61 @@ export const PartnerView: React.FC<PartnerViewProps> = ({
     setPartnerDraftPhone(activePartner.phone);
     setPartnerDraftDistrict(activePartner.district || 'Aizawl');
     setPartnerDraftVeng(activePartner.veng);
+    setPartnerAiOcr(null);
+    setPartnerKycDocPath('');
+    void fetch(`/api/auth-kyc/my-status?targetEntityId=${encodeURIComponent(activePartner.id)}`)
+      .then((r) => r.json())
+      .then((d) => {
+        if (Array.isArray(d.items) && d.items.length > 0) {
+          setQueuedPartnerKycItem(d.items[0]);
+        }
+      })
+      .catch(() => {});
   }, [activePartner]);
+
+  const handlePartnerKycCameraCaptured = async (result: CameraCaptureResult) => {
+    if (!activePartner) return;
+    setPartnerKycDocPath(result.objectPath);
+    try {
+      const res = await fetch('/api/auth-kyc/ai-ocr-scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          docType: 'combined_kyc_sheet',
+          imageDataUrl: result.previewDataUrl,
+          objectPath: result.objectPath,
+          applicantHintName: partnerDraftName || activePartner.name,
+          roleCategory: activePartner.category,
+          district: partnerDraftDistrict,
+          captureSource: result.captureSource,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.extraction) {
+        setPartnerAiOcr(data.extraction as KycAiOcrExtraction);
+        triggerHaptic('success');
+      } else {
+        setFeedback({ type: 'err', msg: data.error || 'AI KYC OCR scan failed.' });
+      }
+    } catch {
+      setFeedback({ type: 'err', msg: 'Network error running AI OCR Agent.' });
+    }
+  };
 
   const handleSavePartnerProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!activePartner) return;
+    if (!partnerAiOcr) {
+      triggerHaptic('error');
+      setFeedback({
+        type: 'err',
+        msg:
+          lang === 'miz'
+            ? 'Partner KYC & Profile update tur chuan Phone Camera hmangin ID/DL thla la phawt rawh (AI Agent OCR).'
+            : 'Capture your KYC ID/DL with Phone Camera first so the AI Agent can scan and stage it for Server Staff verification.',
+      });
+      return;
+    }
     triggerHaptic('medium');
     try {
       const res = await fetch(`/api/auth-kyc/partner-profile/${activePartner.id}`, {
@@ -111,6 +175,9 @@ export const PartnerView: React.FC<PartnerViewProps> = ({
           phone: partnerDraftPhone,
           district: partnerDraftDistrict,
           veng: partnerDraftVeng,
+          kycDocumentPath: partnerKycDocPath,
+          cameraCaptureVerified: true,
+          aiOcrReport: partnerAiOcr,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -121,12 +188,12 @@ export const PartnerView: React.FC<PartnerViewProps> = ({
       }
       triggerHaptic('success');
       setEditingPartnerProfile(false);
+      if (data.kycItem) setQueuedPartnerKycItem(data.kycItem);
       setFeedback({
         type: 'ok',
         msg:
-          lang === 'miz'
-            ? `Partner profile (${data.partner.name} · ${data.partner.veng}) update fel a ni!`
-            : `Partner profile updated (${data.partner.name} · ${data.partner.veng})!`,
+          data.message ||
+          `AI Agent-in i KYC document (${partnerAiOcr.aadhaarMasked}) a scan fel a, Server Staff verify turin queue-ah dah luh a ni!`,
       });
       await onRefresh();
     } catch {
@@ -457,11 +524,22 @@ export const PartnerView: React.FC<PartnerViewProps> = ({
               {editingPartnerProfile
                 ? lang === 'miz'
                   ? 'Khâr'
-                  : 'Close Edit'
+                  : 'Close KYC Update'
                 : lang === 'miz'
-                  ? 'Ka Profile Edit'
-                  : 'Edit My Profile'}
+                  ? 'Camera KYC Update'
+                  : 'Camera KYC Update'}
             </button>
+
+            {queuedPartnerKycItem && (
+              <button
+                type="button"
+                onClick={() => setPartnerVideoModalOpen(true)}
+                className="min-h-[44px] inline-flex items-center gap-1.5 rounded-lg bg-emerald-900 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-800"
+              >
+                <Video className="w-3.5 h-3.5 text-emerald-300" />
+                {lang === 'miz' ? 'HR Video Interview' : 'HR Video Call'}
+              </button>
+            )}
 
             <button
               type="button"
@@ -480,11 +558,39 @@ export const PartnerView: React.FC<PartnerViewProps> = ({
             onSubmit={handleSavePartnerProfile}
             className="rounded-xl bg-teal-50/70 border border-teal-200 p-4 space-y-3"
           >
-            <p className="text-xs font-bold text-teal-950">
-              {lang === 'miz'
-                ? 'Partner Profile Siamthatna (Hming, Phone, District & Base Veng)'
-                : 'Self-Service Partner Profile Update (Name, Phone, District & Base Veng)'}
-            </p>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="text-xs font-bold text-teal-950 flex items-center gap-1.5">
+                  <Bot className="w-4 h-4 text-teal-700" />
+                  {lang === 'miz'
+                    ? 'Partner KYC & Profile Update (Phone Camera AI OCR + Server Staff Verification)'
+                    : 'Partner KYC & Profile Update (Phone Camera AI OCR + Server Staff Verification)'}
+                </p>
+                <p className="text-[11px] text-slate-600">
+                  {lang === 'miz'
+                    ? 'Document pawimawh mahnia update tlang theih a ni lo. Phone Camera-in thla la la, AI Agent-in a scan hnuah Server Staff ten an verify ang.'
+                    : 'Direct unverified edits are blocked. Capture your ID/DL via Phone Camera so the AI Agent scans & stages it for Server Staff approval.'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPartnerKycCameraOpen(true)}
+                className="min-h-[38px] inline-flex items-center gap-1.5 rounded-lg bg-teal-800 px-3 py-1.5 text-xs font-bold text-white hover:bg-teal-900"
+              >
+                <Camera className="w-3.5 h-3.5" />
+                {partnerAiOcr ? 'Retake Camera KYC' : '1. Scan KYC with Phone Camera'}
+              </button>
+            </div>
+
+            {partnerAiOcr && (
+              <div className="rounded-lg bg-white border border-teal-200 p-2.5 text-xs text-slate-800 space-y-0.5">
+                <p className="font-bold text-teal-900">
+                  AI OCR Verified ({partnerAiOcr.aiConfidenceScore}%): Aadhaar {partnerAiOcr.aadhaarMasked} · DL {partnerAiOcr.drivingLicenceNumber || 'N/A'} · Permit {partnerAiOcr.commercialPermitNumber || 'N/A'}
+                </p>
+                <p className="text-[11px] text-slate-600">{partnerAiOcr.aiSummary}</p>
+              </div>
+            )}
+
             <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5">
               <input
                 type="text"
@@ -534,7 +640,9 @@ export const PartnerView: React.FC<PartnerViewProps> = ({
                 type="submit"
                 className="min-h-[36px] rounded-lg bg-teal-800 px-4 text-xs font-bold text-white hover:bg-teal-900"
               >
-                {lang === 'miz' ? 'Partner Profile Save Rawh' : 'Save Partner Profile'}
+                {lang === 'miz'
+                  ? '2. AI KYC Update Server Verification-ah Thawn Rawh'
+                  : '2. Submit AI KYC Update for Server Staff Verification'}
               </button>
             </div>
           </form>
@@ -788,6 +896,28 @@ export const PartnerView: React.FC<PartnerViewProps> = ({
           if (!proofCameraTarget) return;
           await saveProofUrl(proofCameraTarget.jobId, proofCameraTarget.stage, result.url);
         }}
+      />
+
+      <CameraCaptureModal
+        open={partnerKycCameraOpen}
+        onClose={() => setPartnerKycCameraOpen(false)}
+        lang={lang}
+        category="kyc_doc"
+        cameraOnly={true}
+        district={partnerDraftDistrict}
+        titleEn="Phone Camera Partner KYC Scan (AI OCR Agent)"
+        titleMiz="Phone Camera-in Partner KYC Thla La Rawh (AI OCR)"
+        subtitleEn="Gallery upload is disabled. AI Agent scans 12-digit Aadhaar, DL & Permit for Server Staff verification."
+        subtitleMiz="Gallery upload phal a ni lo. AI Agent-in Aadhaar digit 12, DL leh Permit a chhiar nghal ang."
+        onCaptured={(result) => void handlePartnerKycCameraCaptured(result)}
+      />
+
+      <LiveVideoInterviewModal
+        open={partnerVideoModalOpen}
+        onClose={() => setPartnerVideoModalOpen(false)}
+        lang={lang}
+        kycItem={queuedPartnerKycItem}
+        isServerStaff={false}
       />
     </div>
   );

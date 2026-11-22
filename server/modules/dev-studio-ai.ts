@@ -24,6 +24,7 @@ import type {
   PartnerCategory,
   PartnerProfile,
   SumoParcelBooking,
+  SystemIntegrationConfig,
   SystemPlugin,
   TrustBadge,
 } from '../../src/shared/types';
@@ -256,6 +257,7 @@ devStudioAiRouter.get('/master-state', requireAdminAuth, (_req, res) => {
   res.json({
     remoteConfig: state.remoteConfig,
     sandboxConfig: state.sandboxConfig,
+    integrationConfig: state.integrationConfig,
     plugins: state.plugins,
     partners: state.partners,
     errands: state.errands,
@@ -273,6 +275,62 @@ devStudioAiRouter.get('/master-state', requireAdminAuth, (_req, res) => {
     customerWallet: state.customerWallet,
     sumoParcels: state.sumoParcels,
   });
+});
+
+devStudioAiRouter.get('/integrations', requireAdminAuth, (_req, res) => {
+  const state = db.get();
+  res.json({ integrationConfig: state.integrationConfig });
+});
+
+devStudioAiRouter.put('/integrations', requireAdminAuth, (req, res) => {
+  const patch = (req.body || {}) as Partial<SystemIntegrationConfig>;
+  const state = db.get();
+  const prev = state.integrationConfig;
+
+  state.integrationConfig = {
+    ...prev,
+    ...(typeof patch.geminiApiKey === 'string' ? { geminiApiKey: patch.geminiApiKey.trim() } : {}),
+    ...(typeof patch.geminiModel === 'string' && patch.geminiModel.trim()
+      ? { geminiModel: patch.geminiModel.trim() }
+      : {}),
+    ...(typeof patch.enforceCameraOnlyKyc === 'boolean'
+      ? { enforceCameraOnlyKyc: patch.enforceCameraOnlyKyc }
+      : {}),
+    ...(typeof patch.requireFull12DigitAadhaarScan === 'boolean'
+      ? { requireFull12DigitAadhaarScan: patch.requireFull12DigitAadhaarScan }
+      : {}),
+    ...(typeof patch.aiOcrMinConfidence === 'number'
+      ? { aiOcrMinConfidence: Math.max(50, Math.min(99, Math.round(patch.aiOcrMinConfidence))) }
+      : {}),
+    ...(typeof patch.requireServerStaffVerificationForUpdates === 'boolean'
+      ? { requireServerStaffVerificationForUpdates: patch.requireServerStaffVerificationForUpdates }
+      : {}),
+    ...(patch.videoProvider &&
+    ['jitsi_webrtc', 'daily_co', 'livekit_cloud', 'agora_rtc'].includes(patch.videoProvider)
+      ? { videoProvider: patch.videoProvider }
+      : {}),
+    ...(typeof patch.videoServerDomain === 'string' && patch.videoServerDomain.trim()
+      ? { videoServerDomain: patch.videoServerDomain.trim().replace(/\/+$/, '') }
+      : {}),
+    ...(typeof patch.videoApiKey === 'string' ? { videoApiKey: patch.videoApiKey.trim() } : {}),
+    ...(typeof patch.videoApiSecret === 'string'
+      ? { videoApiSecret: patch.videoApiSecret.trim() }
+      : {}),
+    ...(typeof patch.roomPrefix === 'string' && patch.roomPrefix.trim()
+      ? { roomPrefix: patch.roomPrefix.trim().replace(/[^a-zA-Z0-9-_]/g, '') }
+      : {}),
+    ...(typeof patch.defaultRequireVideoForAwmpuiAndDrivers === 'boolean'
+      ? { defaultRequireVideoForAwmpuiAndDrivers: patch.defaultRequireVideoForAwmpuiAndDrivers }
+      : {}),
+    updatedAt: new Date().toISOString(),
+  };
+
+  db.addAudit(
+    'super-admin',
+    'INTEGRATION_CONFIG_UPDATED',
+    `AI Model=${state.integrationConfig.geminiModel} · CameraOnlyKYC=${state.integrationConfig.enforceCameraOnlyKyc} · VideoProvider=${state.integrationConfig.videoProvider}`
+  );
+  res.json({ integrationConfig: state.integrationConfig });
 });
 
 devStudioAiRouter.post('/config-direct', requireAdminAuth, (req, res) => {

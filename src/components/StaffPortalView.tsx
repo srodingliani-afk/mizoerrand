@@ -1,15 +1,20 @@
 import React, { useMemo, useState } from 'react';
 import {
   AlertTriangle,
+  Bot,
   CalendarClock,
+  Camera,
   CheckCircle2,
   ClipboardCheck,
   FileText,
   ShieldCheck,
   UserPlus,
+  Video,
   Wallet,
 } from 'lucide-react';
 import type {
+  KycAiOcrExtraction,
+  KycQueueItem,
   Language,
   MizoramDistrict,
   PayrollRecord,
@@ -26,6 +31,8 @@ import {
   findAnyMizoramVeng,
   getVengsForDistrict,
 } from '../data/mizoramDistricts';
+import { CameraCaptureModal, type CameraCaptureResult } from './CameraCaptureModal';
+import { LiveVideoInterviewModal } from './LiveVideoInterviewModal';
 
 type StaffPortalTab = 'assignment' | 'attendance' | 'payslips';
 
@@ -68,6 +75,11 @@ export const StaffPortalView: React.FC<StaffPortalViewProps> = ({
   const [staffDraftVeng, setStaffDraftVeng] = useState('Dawrpui');
   const [staffDraftSkills, setStaffDraftSkills] = useState('');
   const [staffDraftStatus, setStaffDraftStatus] = useState<'active' | 'on_leave'>('active');
+  const [staffKycCameraOpen, setStaffKycCameraOpen] = useState(false);
+  const [staffAiOcr, setStaffAiOcr] = useState<KycAiOcrExtraction | null>(null);
+  const [staffKycDocPath, setStaffKycDocPath] = useState<string>('');
+  const [queuedStaffKycItem, setQueuedStaffKycItem] = useState<KycQueueItem | null>(null);
+  const [staffVideoModalOpen, setStaffVideoModalOpen] = useState(false);
 
   const activeWorker = useMemo(
     () => workforce.find((w) => w.id === selectedWorkerId) || workforce[0],
@@ -84,11 +96,61 @@ export const StaffPortalView: React.FC<StaffPortalViewProps> = ({
     setStaffDraftStatus(
       activeWorker.availabilityStatus === 'on_leave' ? 'on_leave' : 'active'
     );
+    setStaffAiOcr(null);
+    setStaffKycDocPath('');
+    void fetch(`/api/auth-kyc/my-status?targetEntityId=${encodeURIComponent(activeWorker.id)}`)
+      .then((r) => r.json())
+      .then((d) => {
+        if (Array.isArray(d.items) && d.items.length > 0) {
+          setQueuedStaffKycItem(d.items[0]);
+        }
+      })
+      .catch(() => {});
   }, [activeWorker, selectedDistrict]);
+
+  const handleStaffKycCameraCaptured = async (result: CameraCaptureResult) => {
+    if (!activeWorker) return;
+    setStaffKycDocPath(result.objectPath);
+    try {
+      const res = await fetch('/api/auth-kyc/ai-ocr-scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          docType: 'combined_kyc_sheet',
+          imageDataUrl: result.previewDataUrl,
+          objectPath: result.objectPath,
+          applicantHintName: staffDraftName || activeWorker.name,
+          roleCategory: 'staff',
+          district: staffDraftDistrict,
+          captureSource: result.captureSource,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.extraction) {
+        setStaffAiOcr(data.extraction as KycAiOcrExtraction);
+        triggerHaptic('success');
+      } else {
+        setFeedback({ type: 'err', msg: data.error || 'AI KYC OCR scan failed.' });
+      }
+    } catch {
+      setFeedback({ type: 'err', msg: 'Network error running AI OCR Agent.' });
+    }
+  };
 
   const handleSaveStaffProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeWorker) return;
+    if (!staffAiOcr) {
+      triggerHaptic('error');
+      setFeedback({
+        type: 'err',
+        msg:
+          lang === 'miz'
+            ? 'Awmpui/Driver KYC & Profile update tur chuan Phone Camera hmangin ID/Document thla la phawt rawh (AI Agent OCR).'
+            : 'Capture your KYC ID/Document with Phone Camera first so the AI Agent can scan and stage it for Server Staff verification.',
+      });
+      return;
+    }
     setBusy(true);
     setFeedback(null);
     triggerHaptic('medium');
@@ -106,6 +168,9 @@ export const StaffPortalView: React.FC<StaffPortalViewProps> = ({
             .map((s) => s.trim())
             .filter(Boolean),
           availabilityStatus: staffDraftStatus,
+          kycDocumentPath: staffKycDocPath,
+          cameraCaptureVerified: true,
+          aiOcrReport: staffAiOcr,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -115,12 +180,12 @@ export const StaffPortalView: React.FC<StaffPortalViewProps> = ({
       }
       triggerHaptic('success');
       setEditingStaffProfile(false);
+      if (data.kycItem) setQueuedStaffKycItem(data.kycItem);
       setFeedback({
         type: 'ok',
         msg:
-          lang === 'miz'
-            ? `Staff profile (${data.worker.name} · ${data.worker.veng}) update fel a ni!`
-            : `Staff profile updated (${data.worker.name} · ${data.worker.veng})!`,
+          data.message ||
+          `AI Agent-in i KYC document (${staffAiOcr.aadhaarMasked}) a scan fel a, Server Staff verify leh Live Video Interview turin queue-ah dah luh a ni!`,
       });
       await onRefresh();
     } finally {
@@ -360,11 +425,21 @@ export const StaffPortalView: React.FC<StaffPortalViewProps> = ({
               {editingStaffProfile
                 ? lang === 'miz'
                   ? 'Khâr'
-                  : 'Close Edit'
+                  : 'Close KYC Update'
                 : lang === 'miz'
-                  ? 'Ka Profile Edit'
-                  : 'Edit My Profile'}
+                  ? 'Camera KYC Update'
+                  : 'Camera KYC Update'}
             </button>
+            {queuedStaffKycItem && (
+              <button
+                type="button"
+                onClick={() => setStaffVideoModalOpen(true)}
+                className="min-h-[42px] inline-flex items-center gap-1.5 rounded-xl bg-amber-400 hover:bg-amber-300 px-3.5 text-xs font-extrabold text-slate-950 whitespace-nowrap"
+              >
+                <Video className="w-4 h-4" />
+                {lang === 'miz' ? 'HR Video Interview Lut Rawh' : 'Join HR Video Call'}
+              </button>
+            )}
             <button
               type="button"
               onClick={onOpenApply}
@@ -381,11 +456,38 @@ export const StaffPortalView: React.FC<StaffPortalViewProps> = ({
             onSubmit={handleSaveStaffProfile}
             className="rounded-2xl bg-white/10 border border-white/20 p-4 space-y-3 text-xs"
           >
-            <p className="font-bold text-emerald-200">
-              {lang === 'miz'
-                ? 'Ka Staff Profile Siamthatna (Hming, Phone, Veng, Thiamna & Status)'
-                : 'Self-Service Staff Profile Update (Name, Phone, Veng, Skills & Availability)'}
-            </p>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="font-bold text-emerald-200 flex items-center gap-1.5">
+                  <Bot className="w-4 h-4 text-emerald-300" />
+                  {lang === 'miz'
+                    ? 'Awmpui / Driver KYC & Profile Update (Phone Camera AI OCR + Server Staff Verification)'
+                    : 'Awmpui / Driver KYC & Profile Update (Phone Camera AI OCR + Server Staff Verification)'}
+                </p>
+                <p className="text-[11px] text-emerald-100/80 mt-0.5">
+                  {lang === 'miz'
+                    ? 'Document pawimawh mahnia update tlang theih a ni lo. Phone Camera-in thla la la, AI Agent-in a scan hnuah Server Staff ten an verify ang.'
+                    : 'Direct unverified edits are blocked. Capture your ID/Document via Phone Camera so the AI Agent stages it for Server Staff approval.'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setStaffKycCameraOpen(true)}
+                className="min-h-[38px] inline-flex items-center gap-1.5 rounded-xl bg-emerald-400 hover:bg-emerald-300 px-3.5 py-1.5 text-xs font-extrabold text-emerald-950"
+              >
+                <Camera className="w-3.5 h-3.5" />
+                {staffAiOcr ? 'Retake Camera KYC' : '1. Scan KYC with Phone Camera'}
+              </button>
+            </div>
+
+            {staffAiOcr && (
+              <div className="rounded-xl bg-emerald-900/80 border border-emerald-400/40 p-2.5 text-xs text-emerald-50 space-y-0.5">
+                <p className="font-bold text-emerald-200">
+                  AI OCR Verified ({staffAiOcr.aiConfidenceScore}%): Aadhaar {staffAiOcr.aadhaarMasked} · Voter {staffAiOcr.voterIdNumber || 'N/A'} · PVC {staffAiOcr.pvcNumber || 'N/A'}
+                </p>
+                <p className="text-[11px] text-emerald-100/90">{staffAiOcr.aiSummary}</p>
+              </div>
+            )}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
               <input
                 type="text"
@@ -872,6 +974,28 @@ export const StaffPortalView: React.FC<StaffPortalViewProps> = ({
           </div>
         )}
       </LayerWindow>
+
+      <CameraCaptureModal
+        open={staffKycCameraOpen}
+        onClose={() => setStaffKycCameraOpen(false)}
+        lang={lang}
+        category="kyc_doc"
+        cameraOnly={true}
+        district={staffDraftDistrict}
+        titleEn="Phone Camera Staff KYC Scan (AI OCR Agent)"
+        titleMiz="Phone Camera-in Staff KYC Thla La Rawh (AI OCR)"
+        subtitleEn="Gallery upload is disabled. AI Agent scans 12-digit Aadhaar, Voter ID & PVC for Server Staff verification."
+        subtitleMiz="Gallery upload phal a ni lo. AI Agent-in Aadhaar digit 12, Voter ID leh PVC a chhiar nghal ang."
+        onCaptured={(result) => void handleStaffKycCameraCaptured(result)}
+      />
+
+      <LiveVideoInterviewModal
+        open={staffVideoModalOpen}
+        onClose={() => setStaffVideoModalOpen(false)}
+        lang={lang}
+        kycItem={queuedStaffKycItem}
+        isServerStaff={false}
+      />
     </div>
   );
 };

@@ -22,6 +22,7 @@ import type {
   StaffLeaveRequest,
   StaffingBooking,
   SumoParcelBooking,
+  SystemIntegrationConfig,
   SystemPlugin,
   WorkforceMember,
 } from '../../src/shared/types';
@@ -41,6 +42,7 @@ export interface DatabaseState {
   };
   remoteConfig: AppRemoteConfig;
   sandboxConfig: AppRemoteConfig | null;
+  integrationConfig: SystemIntegrationConfig;
   plugins: SystemPlugin[];
   snapshots: ConfigSnapshot[];
   partners: PartnerProfile[];
@@ -138,6 +140,28 @@ function createInitialState(): DatabaseState {
       enabled: true,
       version: '1.1.0',
       code: `export function applySundayRule(config) {\n  if (!config.sundayEmergencyMode) return config.visibleServices;\n  return { ...config.visibleServices, marketplace: false, workforce: false, emergency24x7: true };\n}`,
+      updatedAt: now,
+    },
+    {
+      id: 'plg-5',
+      key: 'ai-camera-kyc-ocr-guard',
+      name: 'Camera-Only AI KYC OCR & 12-Digit Aadhaar Guard',
+      description: 'Enforces live phone camera capture for KYC documents, runs AI Vision OCR to verify full 12-digit Aadhaar (auto-masked) & DL/Voter ID, and blocks direct unverified self-edits.',
+      module: 'auth-kyc',
+      enabled: true,
+      version: '2.0.0',
+      code: `export function verifyCameraKycScan(scan) {\n  if (scan.captureSource !== 'live_phone_camera') throw new Error('Phone Camera capture required');\n  if (!scan.aadhaarFull12Detected) throw new Error('Full 12-digit Aadhaar must be scanned by AI Agent');\n  return { masked: scan.aadhaarMasked, queueForServerStaff: true };\n}`,
+      updatedAt: now,
+    },
+    {
+      id: 'plg-6',
+      key: 'live-video-interview-webrtc',
+      name: 'In-App Live Video Interview Room (Awmpui & Drivers)',
+      description: 'Integrates embedded WebRTC/Jitsi/Daily/LiveKit live video interview rooms for Awmpui and Drivers with server-side HR staff scheduling, scoring, and discretionary waiver.',
+      module: 'auth-kyc',
+      enabled: true,
+      version: '1.5.0',
+      code: `export function evaluateVideoInterviewRequirement(item, config) {\n  const isAwmpuiOrDriver = item.targetCategory === 'staff' || ['bike', 'auto_taxi', 'pickup_truck'].includes(item.targetCategory);\n  return isAwmpuiOrDriver && config.defaultRequireVideoForAwmpuiAndDrivers;\n}`,
       updatedAt: now,
     },
   ];
@@ -924,11 +948,15 @@ function createInitialState(): DatabaseState {
   const kycQueue: KycQueueItem[] = [
     {
       id: 'kyc-401',
+      requestType: 'new_onboarding',
       applicantName: 'K. Lalbiakdika',
+      phone: '9436188210',
       targetCategory: 'auto_taxi',
       district: 'Aizawl',
       veng: 'Vaivakawn',
       aadhaarMasked: 'XXXX-XXXX-7192',
+      aadhaarFull12Validated: true,
+      aadhaarVerificationHash: 'sha256:9f4b2c7192a8e41c',
       voterIdNumber: 'MIZ/01/449281',
       drivingLicenceNumber: 'MZ01-2019004412',
       commercialPermitNumber: 'MZ-COMM-TAXI-8812',
@@ -938,21 +966,84 @@ function createInitialState(): DatabaseState {
       resumeSummary: '6 years Aizawl-Lengpui hill terrain commercial driving',
       practicalTestScore: 92,
       documentSignedToken: 'pending-issue',
+      cameraCaptureVerified: true,
+      aiOcrReport: {
+        docType: 'combined_kyc_sheet',
+        extractedName: 'K. Lalbiakdika',
+        aadhaarFull12Detected: true,
+        aadhaarMasked: 'XXXX-XXXX-7192',
+        aadhaarVerificationHash: 'sha256:9f4b2c7192a8e41c',
+        voterIdNumber: 'MIZ/01/449281',
+        drivingLicenceNumber: 'MZ01-2019004412',
+        commercialPermitNumber: 'MZ-COMM-TAXI-8812',
+        vehicleRcNumber: 'MZ01-T-4491',
+        pvcNumber: 'PVC-AZL-2026-1182',
+        aiConfidenceScore: 96,
+        captureSource: 'live_phone_camera',
+        livenessVerified: true,
+        tamperVerdict: 'authentic_live_camera',
+        aiModelUsed: 'gemini-2.5-flash',
+        aiSummary: 'Live camera frame verified. Full 12-digit UIDAI Aadhaar format & Verhoeff check passed; DL & Commercial Taxi Permit matched applicant name.',
+        scannedAt: now,
+      },
+      videoInterview: {
+        required: true,
+        status: 'scheduled',
+        provider: 'jitsi_webrtc',
+        roomName: 'zorun-mizoram-hr-kyc-401',
+        roomUrl: 'https://meet.jit.si/zorun-mizoram-hr-kyc-401',
+        scheduledAt: now,
+        interviewerName: 'HR & Fleet Vetting Desk',
+        updatedAt: now,
+      },
       status: 'pending',
     },
     {
       id: 'kyc-402',
+      requestType: 'new_onboarding',
       applicantName: 'Lalnunmawii Tochhawng',
+      phone: '9862344190',
       targetCategory: 'staff',
+      staffMode: 'company_managed_staffing',
+      roleTitle: 'Company-Managed Awmpui & Home Caregiver',
       district: 'Lunglei',
       veng: 'Serkawn',
       aadhaarMasked: 'XXXX-XXXX-3310',
+      aadhaarFull12Validated: true,
+      aadhaarVerificationHash: 'sha256:4a8d1e3310c7b209',
       voterIdNumber: 'MIZ/02/119044',
       pvcNumber: 'PVC-AZL-2026-1209',
       ymaVcReference: 'Republic Veng VC Chairperson Endorsed',
       resumeSummary: '4 years infant & elderly home care, first-aid trained',
       practicalTestScore: 95,
       documentSignedToken: 'pending-issue',
+      cameraCaptureVerified: true,
+      aiOcrReport: {
+        docType: 'combined_kyc_sheet',
+        extractedName: 'Lalnunmawii Tochhawng',
+        aadhaarFull12Detected: true,
+        aadhaarMasked: 'XXXX-XXXX-3310',
+        aadhaarVerificationHash: 'sha256:4a8d1e3310c7b209',
+        voterIdNumber: 'MIZ/02/119044',
+        pvcNumber: 'PVC-AZL-2026-1209',
+        aiConfidenceScore: 97,
+        captureSource: 'live_phone_camera',
+        livenessVerified: true,
+        tamperVerdict: 'authentic_live_camera',
+        aiModelUsed: 'gemini-2.5-flash',
+        aiSummary: 'Live phone camera capture verified. Full 12-digit Aadhaar validated and masked; EPIC & Police Verification hologram matched.',
+        scannedAt: now,
+      },
+      videoInterview: {
+        required: true,
+        status: 'live_room_open',
+        provider: 'jitsi_webrtc',
+        roomName: 'zorun-mizoram-hr-kyc-402',
+        roomUrl: 'https://meet.jit.si/zorun-mizoram-hr-kyc-402',
+        scheduledAt: now,
+        interviewerName: 'Pi Zoramthangi (HR Lead)',
+        updatedAt: now,
+      },
       status: 'pending',
     },
   ];
@@ -1022,9 +1113,26 @@ function createInitialState(): DatabaseState {
   });
   postPayrollDisbursementJournal(ledgerSlice, payrollRecords[0]);
 
+  const defaultIntegrationConfig: SystemIntegrationConfig = {
+    geminiApiKey: process.env.GEMINI_API_KEY?.trim() || '',
+    geminiModel: process.env.GEMINI_MODEL?.trim() || 'gemini-2.5-flash',
+    enforceCameraOnlyKyc: true,
+    requireFull12DigitAadhaarScan: true,
+    aiOcrMinConfidence: 82,
+    requireServerStaffVerificationForUpdates: true,
+    videoProvider: 'jitsi_webrtc',
+    videoServerDomain: 'https://meet.jit.si',
+    videoApiKey: process.env.VIDEO_INTERVIEW_API_KEY?.trim() || '',
+    videoApiSecret: process.env.VIDEO_INTERVIEW_API_SECRET?.trim() || '',
+    roomPrefix: 'zorun-mizoram-hr',
+    defaultRequireVideoForAwmpuiAndDrivers: true,
+    updatedAt: now,
+  };
+
   return {
     remoteConfig: defaultConfig,
     sandboxConfig: null,
+    integrationConfig: defaultIntegrationConfig,
     plugins: defaultPlugins,
     snapshots: [initialSnapshot],
     partners,
@@ -1151,10 +1259,34 @@ class PersistentStore {
           : rawConfig.region,
     };
 
+    const mergedPlugins = Array.isArray(parsed.plugins) ? [...parsed.plugins] : [...defaults.plugins];
+    for (const defPlg of defaults.plugins) {
+      if (!mergedPlugins.some((p) => p.key === defPlg.key)) {
+        mergedPlugins.push(defPlg);
+      }
+    }
+
     return {
       ...defaults,
       ...parsed,
       remoteConfig: normalizedConfig,
+      integrationConfig: parsed.integrationConfig
+        ? { ...defaults.integrationConfig, ...parsed.integrationConfig }
+        : defaults.integrationConfig,
+      plugins: mergedPlugins,
+      kycQueue: Array.isArray(parsed.kycQueue)
+        ? parsed.kycQueue.map((k) => {
+            const seedKyc = defaults.kycQueue.find((d) => d.id === k.id);
+            return {
+              ...seedKyc,
+              ...k,
+              aiOcrReport: k.aiOcrReport || seedKyc?.aiOcrReport,
+              videoInterview: k.videoInterview || seedKyc?.videoInterview,
+              cameraCaptureVerified: k.cameraCaptureVerified ?? seedKyc?.cameraCaptureVerified ?? true,
+              aadhaarFull12Validated: k.aadhaarFull12Validated ?? seedKyc?.aadhaarFull12Validated ?? true,
+            };
+          })
+        : defaults.kycQueue,
       staffLeaveRequests: Array.isArray(parsed.staffLeaveRequests)
         ? parsed.staffLeaveRequests
         : defaults.staffLeaveRequests,

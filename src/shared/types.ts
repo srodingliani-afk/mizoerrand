@@ -403,8 +403,66 @@ export interface EmergencySosTicket {
   createdAt: string;
 }
 
+export interface KycAiOcrExtraction {
+  docType: 'aadhaar_full_card' | 'voter_epic' | 'driving_licence' | 'commercial_permit' | 'vehicle_rc' | 'police_pvc' | 'combined_kyc_sheet';
+  extractedName: string;
+  aadhaarFull12Detected: boolean;
+  aadhaarMasked: string;
+  aadhaarVerificationHash: string;
+  voterIdNumber?: string;
+  drivingLicenceNumber?: string;
+  commercialPermitNumber?: string;
+  vehicleRcNumber?: string;
+  pvcNumber?: string;
+  dobOrYear?: string;
+  aiConfidenceScore: number;
+  captureSource: 'live_phone_camera';
+  livenessVerified: boolean;
+  tamperVerdict: 'authentic_live_camera' | 'needs_manual_check';
+  aiModelUsed: string;
+  aiSummary: string;
+  scannedAt: string;
+}
+
+export interface KycVideoInterviewSession {
+  required: boolean;
+  status:
+    | 'not_required'
+    | 'scheduled'
+    | 'live_room_open'
+    | 'completed_passed'
+    | 'completed_failed'
+    | 'waived_by_staff';
+  provider: 'jitsi_webrtc' | 'daily_co' | 'livekit_cloud' | 'agora_rtc';
+  roomName: string;
+  roomUrl: string;
+  scheduledAt?: string;
+  interviewerName?: string;
+  interviewScore?: number;
+  interviewerNotes?: string;
+  updatedAt: string;
+}
+
+export interface SystemIntegrationConfig {
+  geminiApiKey: string;
+  geminiModel: string;
+  enforceCameraOnlyKyc: boolean;
+  requireFull12DigitAadhaarScan: boolean;
+  aiOcrMinConfidence: number;
+  requireServerStaffVerificationForUpdates: boolean;
+  videoProvider: 'jitsi_webrtc' | 'daily_co' | 'livekit_cloud' | 'agora_rtc';
+  videoServerDomain: string;
+  videoApiKey: string;
+  videoApiSecret: string;
+  roomPrefix: string;
+  defaultRequireVideoForAwmpuiAndDrivers: boolean;
+  updatedAt: string;
+}
+
 export interface KycQueueItem {
   id: string;
+  requestType?: 'new_onboarding' | 'partner_doc_update' | 'staff_doc_update';
+  targetEntityId?: string;
   applicantName: string;
   phone?: string;
   targetCategory: PartnerCategory | 'staff';
@@ -418,6 +476,8 @@ export interface KycQueueItem {
   district?: MizoramDistrict;
   veng: string;
   aadhaarMasked: string;
+  aadhaarFull12Validated?: boolean;
+  aadhaarVerificationHash?: string;
   voterIdNumber: string;
   drivingLicenceNumber?: string;
   commercialPermitNumber?: string;
@@ -428,8 +488,13 @@ export interface KycQueueItem {
   practicalTestScore: number;
   documentSignedToken: string;
   kycDocumentPath?: string;
+  cameraCaptureVerified?: boolean;
+  aiOcrReport?: KycAiOcrExtraction;
+  videoInterview?: KycVideoInterviewSession;
   status: 'pending' | 'approved' | 'rejected';
   assignedBadge?: TrustBadge;
+  reviewedByStaff?: string;
+  reviewedAt?: string;
 }
 
 export interface DisputeCase {
