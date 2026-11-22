@@ -631,7 +631,7 @@ export const StaffPortalView: React.FC<StaffPortalViewProps> = ({
         open={Boolean(selectedPayslip)}
         onClose={() => setSelectedPayslip(null)}
         title={selectedPayslip ? `Digital Payslip · ${selectedPayslip.payslipId}` : 'Payslip'}
-        subtitle="ZoRun Mizoram Managed Staffing Payroll"
+        subtitle="ZoRûn Mizoram Managed Staffing Payroll"
         size="sm"
       >
         {selectedPayslip && (

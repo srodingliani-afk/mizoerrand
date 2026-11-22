@@ -1,5 +1,36 @@
 export type Language = 'en' | 'miz';
 
+export type UserRole =
+  | 'CUSTOMER'
+  | 'RUNNER'
+  | 'STAFF'
+  | 'MERCHANT'
+  | 'TECHNICIAN'
+  | 'SUPER_ADMIN';
+
+export interface DoubleEntryPosting {
+  account: string;
+  side: 'debit' | 'credit';
+  amountRs: number;
+}
+
+export interface DoubleEntryJournal {
+  id: string;
+  eventType:
+    | 'wallet_topup'
+    | 'escrow_hold'
+    | 'escrow_settlement'
+    | 'payroll_disbursement'
+    | 'runner_tip'
+    | 'return_fee';
+  orderRef: string;
+  description: string;
+  postings: DoubleEntryPosting[];
+  totalAmountRs: number;
+  balanced: boolean;
+  createdAt: string;
+}
+
 export type AppMode =
   | 'customer'
   | 'partner'
@@ -27,6 +58,15 @@ export type MizoramDistrict =
 export type PartnerCategory = 'walker' | 'bike' | 'auto_taxi' | 'pickup_truck';
 
 export type AccessType = 'vehicle_accessible' | 'long_steps_walk';
+
+export type KailawnStepTier = 'none' | 'steps_0_15' | 'steps_15_40' | 'steps_40_plus';
+
+export interface MizoramLandmarkAddress {
+  veng: string;
+  ymaSection?: string;
+  nearestLandmark?: string;
+  gpsPinned?: boolean;
+}
 
 export type TrustBadge =
   | 'Basic Verified'
@@ -119,9 +159,15 @@ export interface ErrandRequest {
   destination: LatLng;
   distanceKm: number;
   accessType: AccessType;
+  kailawnNeeded?: boolean;
+  kailawnStepTier?: KailawnStepTier;
+  kailawnSurchargeRs?: number;
+  pickupLandmark?: MizoramLandmarkAddress;
+  dropLandmark?: MizoramLandmarkAddress;
   needsWalkerHelper: boolean;
   buildingPhotoUrl?: string;
   voiceNoteUrl?: string;
+  voiceNoteDurationSec?: number;
   voiceNoteTranscript?: string;
   declaredValue: number;
   paymentMethod: 'upi_escrow' | 'dynamic_qr_cod';
@@ -138,6 +184,59 @@ export interface ErrandRequest {
   beforeProofUrl?: string;
   afterProofUrl?: string;
   bids: ErrandBid[];
+  customerRating?: number;
+  tipAmountRs?: number;
+  ratingNote?: string;
+  createdAt: string;
+}
+
+export interface SavedPlace {
+  id: string;
+  label: string;
+  district: MizoramDistrict;
+  veng: string;
+  landmark?: string;
+}
+
+export interface WalletTransaction {
+  id: string;
+  type: 'topup' | 'referral_bonus' | 'plus_pass' | 'runner_tip' | 'parcel_payment';
+  title: string;
+  amountRs: number;
+  pointsDelta?: number;
+  createdAt: string;
+}
+
+export interface CustomerWalletState {
+  balanceRs: number;
+  loyaltyPoints: number;
+  referralCode: string;
+  referralsClaimed: string[];
+  plusPassActive: boolean;
+  transactions: WalletTransaction[];
+}
+
+export interface SumoParcelBooking {
+  id: string;
+  trackingCode: string;
+  bookingMode?: 'parcel_bridge' | 'proxy_shopping';
+  senderName: string;
+  receiverName: string;
+  receiverPhone: string;
+  originDistrict: MizoramDistrict;
+  originVeng: string;
+  originCounter: string;
+  destinationDistrict: MizoramDistrict;
+  destinationCounter: string;
+  parcelDescription: string;
+  shoppingMarket?: string;
+  estimatedItemBudgetRs?: number;
+  proxyShoppingFeeRs?: number;
+  receiptPhotoUrl?: string;
+  weightKg: number;
+  includeHomeDrop: boolean;
+  allInclusiveTotal: number;
+  status: 'pickup_scheduled' | 'at_sumo_counter' | 'in_transit' | 'delivered';
   createdAt: string;
 }
 
@@ -176,6 +275,9 @@ export interface MarketplaceOrder {
   hygieneCategory: HygieneCategory;
   returnFeeOnReject: number;
   status: 'awaiting_inspection' | 'accepted_paid' | 'rejected_return_fee_charged';
+  voiceNoteUrl?: string;
+  voiceNoteDurationSec?: number;
+  voiceNoteTranscript?: string;
   chatMessages: { sender: 'customer' | 'merchant'; text: string; at: string }[];
   createdAt: string;
 }
@@ -312,6 +414,7 @@ export interface KycQueueItem {
   resumeSummary: string;
   practicalTestScore: number;
   documentSignedToken: string;
+  kycDocumentPath?: string;
   status: 'pending' | 'approved' | 'rejected';
   assignedBadge?: TrustBadge;
 }

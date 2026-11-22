@@ -1,9 +1,15 @@
-import fs from 'fs';
-import path from 'path';
+import {
+  createStorageAdapter,
+  type StorageAdapter,
+  type StorageDriverMetadata,
+  type StorageHealthReport,
+} from './dbAdapter';
 import type {
   AppRemoteConfig,
   ConfigSnapshot,
+  CustomerWalletState,
   DisputeCase,
+  DoubleEntryJournal,
   EmergencySosTicket,
   ErrandRequest,
   EscrowLedgerEntry,
@@ -15,10 +21,17 @@ import type {
   StaffAttendanceLog,
   StaffLeaveRequest,
   StaffingBooking,
+  SumoParcelBooking,
   SystemPlugin,
   WorkforceMember,
 } from '../../src/shared/types';
 import { liveGpsCache } from './redisCache';
+import {
+  postEscrowHoldJournal,
+  postEscrowSettlementJournal,
+  postPayrollDisbursementJournal,
+  postWalletTopupJournal,
+} from './ledgerService';
 
 export interface DatabaseState {
   adminAuth?: {
@@ -46,18 +59,19 @@ export interface DatabaseState {
   kycQueue: KycQueueItem[];
   disputes: DisputeCase[];
   escrowLedger: EscrowLedgerEntry[];
+  doubleEntryJournals: DoubleEntryJournal[];
+  accountBalances: Record<string, number>;
+  customerWallet: CustomerWalletState;
+  sumoParcels: SumoParcelBooking[];
   auditLogs: { id: string; actor: string; action: string; detail: string; at: string }[];
 }
-
-const DATA_DIR = path.resolve(process.cwd(), '.data');
-const DB_FILE = path.join(DATA_DIR, 'zorun-db.json');
 
 function createInitialState(): DatabaseState {
   const now = new Date().toISOString();
 
   const defaultConfig: AppRemoteConfig = {
-    appName: 'ZoRun Mizoram',
-    region: 'ap-south-1',
+    appName: 'ZoRûn Mizoram',
+    region: 'asia-south1',
     sundayEmergencyMode: false,
     rainSurgeMultiplier: 1.0,
     trafficSurgeMultiplier: 1.0,
@@ -977,11 +991,36 @@ function createInitialState(): DatabaseState {
 
   const initialSnapshot: ConfigSnapshot = {
     id: 'snap-initial',
-    label: 'Baseline Production Release (ap-south-1)',
+    label: 'Baseline Production Release (asia-south1)',
     createdAt: now,
     config: structuredClone(defaultConfig),
     plugins: structuredClone(defaultPlugins),
   };
+
+  const ledgerSlice: {
+    doubleEntryJournals: DoubleEntryJournal[];
+    accountBalances: Record<string, number>;
+  } = {
+    doubleEntryJournals: [],
+    accountBalances: {},
+  };
+
+  postWalletTopupJournal(ledgerSlice, {
+    customerId: 'cust-1',
+    amountRs: 320,
+    refId: 'wtx-seed-1',
+  });
+  postEscrowHoldJournal(ledgerSlice, {
+    orderRef: escrowLedger[0].orderRef,
+    customerId: 'cust-1',
+    grossAllInclusive: escrowLedger[0].grossAllInclusive,
+    paymentMode: 'upi_escrow',
+  });
+  postEscrowSettlementJournal(ledgerSlice, {
+    entry: escrowLedger[0],
+    partnerId: 'ptr-walker-1',
+  });
+  postPayrollDisbursementJournal(ledgerSlice, payrollRecords[0]);
 
   return {
     remoteConfig: defaultConfig,
@@ -1004,12 +1043,51 @@ function createInitialState(): DatabaseState {
     kycQueue,
     disputes,
     escrowLedger,
+    doubleEntryJournals: ledgerSlice.doubleEntryJournals,
+    accountBalances: ledgerSlice.accountBalances,
+    customerWallet: {
+      balanceRs: 320,
+      loyaltyPoints: 240,
+      referralCode: 'ZORUN-MZ-2026',
+      referralsClaimed: [],
+      plusPassActive: false,
+      transactions: [
+        {
+          id: 'wtx-seed-1',
+          type: 'topup',
+          title: 'Welcome UPI Wallet Credit',
+          amountRs: 320,
+          pointsDelta: 240,
+          createdAt: now,
+        },
+      ],
+    },
+    sumoParcels: [
+      {
+        id: 'sumo-seed-1',
+        trackingCode: 'SUMO-MZ-4821',
+        senderName: 'Malsawmkimi',
+        receiverName: 'Pi Lalhmingliani',
+        receiverPhone: '+91 94361 55210',
+        originDistrict: 'Aizawl',
+        originVeng: 'Khatla',
+        originCounter: 'Zarkawt Sumo Counter',
+        destinationDistrict: 'Lunglei',
+        destinationCounter: 'Chanmari Lunglei Counter',
+        parcelDescription: 'Home-baked cakes & winter shawls (3 kg box)',
+        weightKg: 3,
+        includeHomeDrop: true,
+        allInclusiveTotal: 280,
+        status: 'in_transit',
+        createdAt: now,
+      },
+    ],
     auditLogs: [
       {
         id: 'aud-1',
         actor: 'system',
         action: 'BOOTSTRAP',
-        detail: 'Initialized ZoRun Mizoram ap-south-1 modular microservices & SDUI tables',
+        detail: 'Initialized ZoRun Mizoram asia-south1 modular microservices, Firebase & Double-Entry Ledger',
         at: now,
       },
     ],
@@ -1017,9 +1095,11 @@ function createInitialState(): DatabaseState {
 }
 
 class PersistentStore {
+  private readonly adapter: StorageAdapter<DatabaseState>;
   private state: DatabaseState;
 
-  constructor() {
+  constructor(adapter?: StorageAdapter<DatabaseState>) {
+    this.adapter = adapter ?? createStorageAdapter<DatabaseState>();
     this.state = this.loadOrSeed();
     for (const p of this.state.partners) {
       liveGpsCache.setPartnerLocation(p.id, p.lat, p.lng, p.online, 3600_000);
@@ -1028,48 +1108,100 @@ class PersistentStore {
 
   private loadOrSeed(): DatabaseState {
     try {
-      if (fs.existsSync(DB_FILE)) {
-        const raw = fs.readFileSync(DB_FILE, 'utf8');
-        const parsed = JSON.parse(raw) as Partial<DatabaseState>;
-        const defaults = createInitialState();
-        const merged: DatabaseState = {
-          ...defaults,
-          ...parsed,
-          staffLeaveRequests: Array.isArray(parsed.staffLeaveRequests)
-            ? parsed.staffLeaveRequests
-            : defaults.staffLeaveRequests,
-          staffAttendanceLogs: Array.isArray(parsed.staffAttendanceLogs)
-            ? parsed.staffAttendanceLogs
-            : defaults.staffAttendanceLogs,
-          staffingBookings:
-            Array.isArray(parsed.staffingBookings) && parsed.staffingBookings.length > 0
-              ? parsed.staffingBookings
-              : defaults.staffingBookings,
-          workforce: Array.isArray(parsed.workforce)
-            ? parsed.workforce.map((w) => {
-                const seedMatch = defaults.workforce.find((d) => d.id === w.id);
-                return {
-                  ...w,
-                  availabilityStatus: w.availabilityStatus || 'active',
-                  bankAccountMasked: w.bankAccountMasked || seedMatch?.bankAccountMasked,
-                  verifiedBadge: w.verifiedBadge || seedMatch?.verifiedBadge,
-                };
-              })
-            : defaults.workforce,
-        };
-        return merged;
+      const parsed = this.adapter.loadSync();
+      if (parsed) {
+        return this.mergeWithDefaults(parsed);
       }
     } catch {
       // Fallback to fresh seed if corrupted
     }
     const fresh = createInitialState();
-    this.writeToDisk(fresh);
+    this.adapter.saveSync(fresh);
     return fresh;
   }
 
-  private writeToDisk(state: DatabaseState): void {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-    fs.writeFileSync(DB_FILE, JSON.stringify(state, null, 2), 'utf8');
+  async initAsync(): Promise<void> {
+    try {
+      const remote = await this.adapter.loadAsync();
+      if (remote) {
+        this.state = this.mergeWithDefaults(remote);
+        for (const p of this.state.partners) {
+          liveGpsCache.setPartnerLocation(p.id, p.lat, p.lng, p.online, 3600_000);
+        }
+      }
+    } catch {
+      // Keep sync-loaded local mirror / seeded state
+    }
+  }
+
+  private mergeWithDefaults(parsed: Partial<DatabaseState>): DatabaseState {
+    const defaults = createInitialState();
+    const rawConfig = parsed.remoteConfig
+      ? { ...defaults.remoteConfig, ...parsed.remoteConfig }
+      : defaults.remoteConfig;
+    const normalizedConfig: AppRemoteConfig = {
+      ...rawConfig,
+      appName:
+        !rawConfig.appName || rawConfig.appName === 'ZoRun Mizoram' || rawConfig.appName === 'ZoRun'
+          ? 'ZoRûn Mizoram'
+          : rawConfig.appName,
+      region:
+        !rawConfig.region || rawConfig.region === 'ap-south-1'
+          ? 'asia-south1'
+          : rawConfig.region,
+    };
+
+    return {
+      ...defaults,
+      ...parsed,
+      remoteConfig: normalizedConfig,
+      staffLeaveRequests: Array.isArray(parsed.staffLeaveRequests)
+        ? parsed.staffLeaveRequests
+        : defaults.staffLeaveRequests,
+      staffAttendanceLogs: Array.isArray(parsed.staffAttendanceLogs)
+        ? parsed.staffAttendanceLogs
+        : defaults.staffAttendanceLogs,
+      staffingBookings:
+        Array.isArray(parsed.staffingBookings) && parsed.staffingBookings.length > 0
+          ? parsed.staffingBookings
+          : defaults.staffingBookings,
+      workforce: Array.isArray(parsed.workforce)
+        ? parsed.workforce.map((w) => {
+            const seedMatch = defaults.workforce.find((d) => d.id === w.id);
+            return {
+              ...w,
+              availabilityStatus: w.availabilityStatus || 'active',
+              bankAccountMasked: w.bankAccountMasked || seedMatch?.bankAccountMasked,
+              verifiedBadge: w.verifiedBadge || seedMatch?.verifiedBadge,
+            };
+          })
+        : defaults.workforce,
+      customerWallet:
+        parsed.customerWallet && typeof parsed.customerWallet.balanceRs === 'number'
+          ? {
+              ...defaults.customerWallet,
+              ...parsed.customerWallet,
+              referralsClaimed: Array.isArray(parsed.customerWallet.referralsClaimed)
+                ? parsed.customerWallet.referralsClaimed
+                : [],
+              transactions: Array.isArray(parsed.customerWallet.transactions)
+                ? parsed.customerWallet.transactions
+                : defaults.customerWallet.transactions,
+            }
+          : defaults.customerWallet,
+      sumoParcels:
+        Array.isArray(parsed.sumoParcels) && parsed.sumoParcels.length > 0
+          ? parsed.sumoParcels
+          : defaults.sumoParcels,
+      doubleEntryJournals:
+        Array.isArray(parsed.doubleEntryJournals) && parsed.doubleEntryJournals.length > 0
+          ? parsed.doubleEntryJournals
+          : defaults.doubleEntryJournals,
+      accountBalances:
+        parsed.accountBalances && typeof parsed.accountBalances === 'object'
+          ? parsed.accountBalances
+          : defaults.accountBalances,
+    };
   }
 
   get(): DatabaseState {
@@ -1077,7 +1209,15 @@ class PersistentStore {
   }
 
   commit(): void {
-    this.writeToDisk(this.state);
+    this.adapter.saveSync(this.state);
+  }
+
+  getStorageInfo(): StorageDriverMetadata {
+    return this.adapter.getMetadata();
+  }
+
+  checkDatabaseHealth(): Promise<StorageHealthReport> {
+    return this.adapter.checkHealth();
   }
 
   addAudit(actor: string, action: string, detail: string): void {

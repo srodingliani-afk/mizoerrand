@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { db } from '../infrastructure/store';
 import { realtimeHub } from '../infrastructure/realtimeHub';
 import { requireAdminAuth } from '../infrastructure/adminAuth';
+import { postPayrollDisbursementJournal } from '../infrastructure/ledgerService';
 import {
   calculateManagedPayrollSplit,
   selectEligibleReplacements,
@@ -470,6 +471,7 @@ managedStaffingRouter.post('/payroll/:id/disburse', requireAdminAuth, (req, res)
     return;
   }
   record.status = 'salary_disbursed';
+  postPayrollDisbursementJournal(state, record);
   db.addAudit(
     'hr-payroll',
     'SALARY_DISBURSED',

@@ -98,28 +98,28 @@ export const LayerWindow: React.FC<LayerWindowProps> = ({
       ? 'bg-red-600 text-white border-red-700/40'
       : accent === 'emerald'
         ? 'bg-emerald-950 text-white border-emerald-900'
-        : 'bg-white text-slate-900 border-slate-100';
+        : 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 border-slate-100 dark:border-slate-800';
 
   const subtitleTone =
     accent === 'danger'
       ? 'text-red-100'
       : accent === 'emerald'
         ? 'text-emerald-200'
-        : 'text-slate-500';
+        : 'text-slate-500 dark:text-slate-400';
 
   const iconBtnTone =
     accent === 'danger'
       ? 'text-white/90 hover:bg-white/15'
       : accent === 'emerald'
         ? 'text-emerald-100 hover:bg-white/10'
-        : 'text-slate-500 hover:bg-slate-100';
+        : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800';
 
   const handleTone =
     accent === 'danger'
       ? 'bg-white/35'
       : accent === 'emerald'
         ? 'bg-white/25'
-        : 'bg-slate-200';
+        : 'bg-slate-200 dark:bg-slate-700';
 
   const handleDismiss = () => {
     triggerHaptic('light');
@@ -142,8 +142,8 @@ export const LayerWindow: React.FC<LayerWindowProps> = ({
 
       {/* Layered Window / Mobile Bottom Sheet Surface */}
       <div
-        className={`relative w-full ${SIZE_CLASSES[size]} max-h-[88dvh] sm:max-h-[86dvh] flex flex-col rounded-t-3xl sm:rounded-3xl bg-white shadow-2xl overflow-hidden layer-sheet-enter ${
-          layerLevel === 2 ? 'ring-1 ring-slate-900/10' : ''
+        className={`relative w-full ${SIZE_CLASSES[size]} max-h-[88dvh] sm:max-h-[86dvh] flex flex-col rounded-t-3xl sm:rounded-3xl bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-2xl overflow-hidden layer-sheet-enter border border-transparent dark:border-slate-800 ${
+          layerLevel === 2 ? 'ring-1 ring-slate-900/10 dark:ring-white/10' : ''
         }`}
       >
         {/* Top Bar + Mobile Drag Affordance */}
@@ -197,7 +197,7 @@ export const LayerWindow: React.FC<LayerWindowProps> = ({
 
         {/* Optional Sticky Footer CTA Bar */}
         {footer && (
-          <div className="shrink-0 border-t border-slate-200 bg-white px-4 sm:px-5 py-3.5 pb-safe">
+          <div className="shrink-0 border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-4 sm:px-5 py-3.5 pb-safe">
             {footer}
           </div>
         )}

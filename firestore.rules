@@ -1,0 +1,347 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // =========================================================================
+    // GLOBAL DEFAULT DENY SAFETY NET
+    // =========================================================================
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // =========================================================================
+    // HARDENED PRIMITIVE HELPERS
+    // =========================================================================
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isAdmin() {
+      return isVerifiedUser() && (
+        request.auth.token.email == 'srodingliani@gmail.com' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isValidDistrict(d) {
+      return d is string && d in [
+        'Aizawl',
+        'Lunglei',
+        'Champhai',
+        'Serchhip',
+        'Kolasib',
+        'Lawngtlai',
+        'Mamit',
+        'Siaha',
+        'Saitual',
+        'Khawzawl',
+        'Hnahthial'
+      ];
+    }
+
+    // =========================================================================
+    // VALIDATION BLUEPRINTS (ANTI-UPDATE-GAP HELPERS)
+    // =========================================================================
+    function isValidUserPublicProfile(data, uid) {
+      return data.keys().hasAll(['uid', 'displayName', 'role', 'district', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'displayName', 'role', 'preferredWorkspace', 'district', 'photoUrl', 'createdAt', 'updatedAt'])
+        && data.uid is string && data.uid == uid && data.uid.size() <= 128
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80
+        && data.role is string && data.role in ['CUSTOMER', 'RUNNER', 'STAFF', 'MERCHANT', 'TECHNICIAN', 'SUPER_ADMIN']
+        && (!('preferredWorkspace' in data) || (data.preferredWorkspace is string && data.preferredWorkspace in ['customer', 'partner', 'staff', 'merchant', 'technician']))
+        && isValidDistrict(data.district)
+        && (!('photoUrl' in data) || (data.photoUrl is string && data.photoUrl.size() <= 512))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidUserPrivateInfo(data, uid) {
+      return data.keys().hasAll(['uid', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'phone', 'defaultVeng', 'createdAt', 'updatedAt'])
+        && data.uid is string && data.uid == uid && data.uid.size() <= 128
+        && (!('email' in data) || (data.email is string && data.email.size() <= 160))
+        && (!('phone' in data) || (data.phone is string && data.phone.size() <= 24))
+        && (!('defaultVeng' in data) || (data.defaultVeng is string && data.defaultVeng.size() <= 80))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAdminEntry(data, uid) {
+      return data.keys().hasAll(['uid', 'role', 'createdAt'])
+        && data.keys().hasOnly(['uid', 'role', 'grantedBy', 'createdAt'])
+        && data.uid is string && data.uid == uid && data.uid.size() <= 128
+        && data.role == 'SUPER_ADMIN'
+        && (!('grantedBy' in data) || (data.grantedBy is string && data.grantedBy.size() <= 128))
+        && data.createdAt is timestamp;
+    }
+
+    function isValidRunnerLocation(data, district, partnerId) {
+      return data.keys().hasAll(['partnerId', 'ownerUid', 'name', 'district', 'veng', 'category', 'online', 'lat', 'lng', 'updatedAt'])
+        && data.keys().hasOnly(['partnerId', 'ownerUid', 'name', 'district', 'veng', 'category', 'online', 'lat', 'lng', 'accuracyMeters', 'updatedAt'])
+        && data.partnerId is string && data.partnerId == partnerId && data.partnerId.size() <= 64
+        && data.ownerUid is string && data.ownerUid.size() >= 1 && data.ownerUid.size() <= 128
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 80
+        && isValidDistrict(data.district) && data.district == district
+        && data.veng is string && data.veng.size() >= 1 && data.veng.size() <= 80
+        && data.category is string && data.category in ['walker', 'bike', 'auto_taxi', 'pickup_truck']
+        && data.online is bool
+        && data.lat is number && data.lat >= 21.0 && data.lat <= 25.5
+        && data.lng is number && data.lng >= 91.5 && data.lng <= 94.0
+        && (!('accuracyMeters' in data) || (data.accuracyMeters is number && data.accuracyMeters >= 0 && data.accuracyMeters <= 5000))
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidLiveOrder(data, district, orderId) {
+      return data.keys().hasAll(['orderId', 'customerUid', 'district', 'title', 'jobType', 'status', 'allInclusiveTotal', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['orderId', 'customerUid', 'assignedRunnerUid', 'district', 'title', 'jobType', 'status', 'allInclusiveTotal', 'kailawnSurchargeRs', 'createdAt', 'updatedAt'])
+        && data.orderId is string && data.orderId == orderId && data.orderId.size() <= 64
+        && data.customerUid is string && data.customerUid.size() >= 1 && data.customerUid.size() <= 128
+        && (!('assignedRunnerUid' in data) || (data.assignedRunnerUid is string && data.assignedRunnerUid.size() <= 128))
+        && isValidDistrict(data.district) && data.district == district
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 160
+        && data.jobType is string && data.jobType in ['hyperlocal_errand', 'step_delivery', 'queue_standing', 'truck_helper', 'bike_express', 'auto_cab_ride', 'heavy_cargo_shift']
+        && data.status is string && data.status in ['bidding', 'assigned', 'in_progress', 'completed', 'cancelled']
+        && data.allInclusiveTotal is number && data.allInclusiveTotal >= 0 && data.allInclusiveTotal <= 100000
+        && (!('kailawnSurchargeRs' in data) || (data.kailawnSurchargeRs is number && data.kailawnSurchargeRs >= 0 && data.kailawnSurchargeRs <= 500))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSosAlert(data, district, ticketId) {
+      return data.keys().hasAll(['ticketId', 'customerUid', 'district', 'veng', 'category', 'lat', 'lng', 'status', 'slaTargetMinutes', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['ticketId', 'customerUid', 'assignedTechUid', 'district', 'veng', 'category', 'lat', 'lng', 'status', 'assignedTechName', 'slaTargetMinutes', 'createdAt', 'updatedAt'])
+        && data.ticketId is string && data.ticketId == ticketId && data.ticketId.size() <= 64
+        && data.customerUid is string && data.customerUid.size() >= 1 && data.customerUid.size() <= 128
+        && (!('assignedTechUid' in data) || (data.assignedTechUid is string && data.assignedTechUid.size() <= 128))
+        && isValidDistrict(data.district) && data.district == district
+        && data.veng is string && data.veng.size() >= 1 && data.veng.size() <= 80
+        && data.category is string && data.category.size() >= 1 && data.category.size() <= 64
+        && data.lat is number && data.lat >= 21.0 && data.lat <= 25.5
+        && data.lng is number && data.lng >= 91.5 && data.lng <= 94.0
+        && data.status is string && data.status in ['flashing_dispatch', 'en_route', 'resolved']
+        && (!('assignedTechName' in data) || (data.assignedTechName is string && data.assignedTechName.size() <= 80))
+        && data.slaTargetMinutes is number && data.slaTargetMinutes >= 1 && data.slaTargetMinutes <= 120
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // =========================================================================
+    // CONNECTION BOOT PROBE (/test/connection)
+    // =========================================================================
+    match /test/connection {
+      allow get: if true;
+      allow list, create, update, delete: if false;
+    }
+
+    // =========================================================================
+    // ADMIN REGISTRY (/admins/{adminUid})
+    // =========================================================================
+    match /admins/{adminUid} {
+      allow get: if isValidId(adminUid) && (isOwner(adminUid) || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isAdmin()
+        && isValidId(adminUid)
+        && isValidAdminEntry(incoming(), adminUid)
+        && incoming().createdAt == request.time;
+      allow update: if isAdmin()
+        && isValidId(adminUid)
+        && isValidAdminEntry(incoming(), adminUid)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt;
+      allow delete: if isAdmin() && isValidId(adminUid);
+    }
+
+    // =========================================================================
+    // SPLIT USER PROFILES: PUBLIC RBAC + PRIVATE PII
+    // =========================================================================
+    match /users/{userId}/public/{docId} {
+      allow get: if isSignedIn() && isValidId(userId) && isValidId(docId);
+      allow list: if isSignedIn() && (isOwner(userId) || isAdmin());
+
+      allow create: if isVerifiedUser()
+        && isValidId(userId)
+        && docId == 'profile'
+        && isValidUserPublicProfile(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (isAdmin() || (isOwner(userId) && incoming().role == 'CUSTOMER'));
+
+      allow update: if isVerifiedUser()
+        && isValidId(userId)
+        && docId == 'profile'
+        && isValidUserPublicProfile(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            isOwner(userId)
+            && incoming().role == existing().role
+            && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'preferredWorkspace', 'district', 'photoUrl', 'updatedAt'])
+          )
+        );
+
+      allow delete: if isAdmin() && isValidId(userId) && isValidId(docId);
+    }
+
+    match /users/{userId}/private/{docId} {
+      allow get: if isValidId(userId) && isValidId(docId) && (isOwner(userId) || isAdmin());
+      allow list: if isOwner(userId) || isAdmin();
+
+      allow create: if isVerifiedUser()
+        && isValidId(userId)
+        && docId == 'info'
+        && isOwner(userId)
+        && isValidUserPrivateInfo(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser()
+        && isValidId(userId)
+        && docId == 'info'
+        && (isOwner(userId) || isAdmin())
+        && isValidUserPrivateInfo(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['email', 'phone', 'defaultVeng', 'updatedAt']);
+
+      allow delete: if isAdmin() && isValidId(userId) && isValidId(docId);
+    }
+
+    // =========================================================================
+    // DISTRICT-SCOPED REAL-TIME RUNNERS, ORDERS & 24x7 SOS
+    // =========================================================================
+    match /districts/{district}/runners/{partnerId} {
+      allow get: if isSignedIn() && isValidDistrict(district) && isValidId(partnerId);
+      allow list: if isSignedIn() && (resource.data.online == true || resource.data.ownerUid == request.auth.uid || isAdmin());
+
+      allow create: if isVerifiedUser()
+        && isValidDistrict(district)
+        && isValidId(partnerId)
+        && isValidRunnerLocation(incoming(), district, partnerId)
+        && incoming().updatedAt == request.time
+        && (isAdmin() || incoming().ownerUid == request.auth.uid);
+
+      allow update: if isVerifiedUser()
+        && isValidDistrict(district)
+        && isValidId(partnerId)
+        && isValidRunnerLocation(incoming(), district, partnerId)
+        && incoming().partnerId == existing().partnerId
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().district == existing().district
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            existing().ownerUid == request.auth.uid
+            && incoming().diff(existing()).affectedKeys().hasOnly(['veng', 'online', 'lat', 'lng', 'accuracyMeters', 'updatedAt'])
+          )
+        );
+
+      allow delete: if isAdmin() && isValidDistrict(district) && isValidId(partnerId);
+    }
+
+    match /districts/{district}/orders/{orderId} {
+      allow get: if isSignedIn() && isValidDistrict(district) && isValidId(orderId)
+        && (resource.data.customerUid == request.auth.uid || resource.data.assignedRunnerUid == request.auth.uid || resource.data.status == 'bidding' || isAdmin());
+      allow list: if isSignedIn()
+        && (resource.data.customerUid == request.auth.uid || resource.data.assignedRunnerUid == request.auth.uid || resource.data.status == 'bidding' || isAdmin());
+
+      allow create: if isVerifiedUser()
+        && isValidDistrict(district)
+        && isValidId(orderId)
+        && isValidLiveOrder(incoming(), district, orderId)
+        && incoming().customerUid == request.auth.uid
+        && incoming().status == 'bidding'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser()
+        && isValidDistrict(district)
+        && isValidId(orderId)
+        && isValidLiveOrder(incoming(), district, orderId)
+        && incoming().orderId == existing().orderId
+        && incoming().customerUid == existing().customerUid
+        && incoming().district == existing().district
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            existing().status != 'completed' && existing().status != 'cancelled' && (
+              (existing().customerUid == request.auth.uid
+                && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'assignedRunnerUid', 'allInclusiveTotal', 'updatedAt'])) ||
+              (existing().assignedRunnerUid == request.auth.uid
+                && incoming().status in ['in_progress', 'completed']
+                && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']))
+            )
+          )
+        );
+
+      allow delete: if isAdmin() && isValidDistrict(district) && isValidId(orderId);
+    }
+
+    match /districts/{district}/sos/{ticketId} {
+      allow get: if isSignedIn() && isValidDistrict(district) && isValidId(ticketId)
+        && (resource.data.customerUid == request.auth.uid || resource.data.assignedTechUid == request.auth.uid || isAdmin());
+      allow list: if isSignedIn()
+        && (resource.data.customerUid == request.auth.uid || resource.data.assignedTechUid == request.auth.uid || isAdmin());
+
+      allow create: if isVerifiedUser()
+        && isValidDistrict(district)
+        && isValidId(ticketId)
+        && isValidSosAlert(incoming(), district, ticketId)
+        && incoming().customerUid == request.auth.uid
+        && incoming().status == 'flashing_dispatch'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser()
+        && isValidDistrict(district)
+        && isValidId(ticketId)
+        && isValidSosAlert(incoming(), district, ticketId)
+        && incoming().ticketId == existing().ticketId
+        && incoming().customerUid == existing().customerUid
+        && incoming().district == existing().district
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            existing().status != 'resolved' && (
+              (existing().assignedTechUid == request.auth.uid
+                && incoming().status in ['en_route', 'resolved']
+                && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])) ||
+              (existing().customerUid == request.auth.uid
+                && incoming().status == 'resolved'
+                && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']))
+            )
+          )
+        );
+
+      allow delete: if isAdmin() && isValidDistrict(district) && isValidId(ticketId);
+    }
+  }
+}

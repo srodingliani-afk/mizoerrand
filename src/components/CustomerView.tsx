@@ -22,6 +22,7 @@ import {
   MessageCircle,
   Mic,
   Mountain,
+  Package,
   PhoneCall,
   Pill,
   Plus,
@@ -36,6 +37,7 @@ import {
   Stethoscope,
   Trash2,
   Truck,
+  Wallet,
   Wrench,
   X,
   Zap,
@@ -43,17 +45,22 @@ import {
 import type {
   AccessType,
   AppRemoteConfig,
+  CustomerWalletState,
   EmergencyCategory,
   EmergencySosTicket,
   ErrandJobType,
   ErrandRequest,
+  KailawnStepTier,
   Language,
   LatLng,
   MarketplaceOrder,
   MarketplaceProduct,
   MizoramDistrict,
+  MizoramLandmarkAddress,
   PartnerProfile,
+  SavedPlace,
   StaffingBooking,
+  SumoParcelBooking,
   WorkforceMember,
 } from '../shared/types';
 import { TRANSLATIONS } from '../i18n/translations';
@@ -64,10 +71,33 @@ import {
   getVengsForDistrict,
 } from '../data/mizoramDistricts';
 import { compressImageToWebP } from '../lib/offlineCache';
+import { dataUrlToBlob, uploadMediaFile } from '../lib/mediaUpload';
+import {
+  resolveAddressFromCoords,
+  startLiveGpsWatch,
+  type LiveGpsFix,
+  type LiveLocationWatcher,
+  type ResolvedLocationAddress,
+} from '../lib/geolocation';
 import { triggerHaptic } from '../lib/nativeBridge';
+import { getFirebaseIdToken, useFirebaseAuth } from '../lib/firebase';
+import {
+  publishLiveOrderToFirestore,
+  publishSosAlertToFirestore,
+  subscribeDistrictOrders,
+  subscribeDistrictRunners,
+  subscribeDistrictSos,
+} from '../lib/firestoreSync';
 import type { UserAppSettings } from '../lib/userSettings';
 import { LayerWindow } from './LayerWindow';
 import { CustomerDetailLayers } from './CustomerDetailLayers';
+import { UniversalSearchBar } from './UniversalSearchBar';
+import { WalletRewardsWindow } from './WalletRewardsWindow';
+import { SumoParcelWindow } from './SumoParcelWindow';
+import { LiveTripTrackerBar } from './LiveTripTrackerBar';
+import { VoiceNoteRecorder, type VoiceNoteValue } from './VoiceNoteRecorder';
+import { CameraCaptureModal } from './CameraCaptureModal';
+import { MapPinPickerWindow, type PinPickerMode } from './MapPinPickerWindow';
 
 const LazyMizoramMap = lazy(() =>
   import('./MizoramMap').then((m) => ({ default: m.MizoramMap }))
@@ -103,7 +133,10 @@ interface CustomerViewProps {
   workforce: WorkforceMember[];
   staffingBookings: StaffingBooking[];
   sosTickets: EmergencySosTicket[];
+  customerWallet: CustomerWalletState;
+  sumoParcels: SumoParcelBooking[];
   userSettings: UserAppSettings;
+  onUpdateUserSettings: (patch: Partial<UserAppSettings>) => void;
   onOpenSettings?: () => void;
   onOpenApply?: () => void;
   onOpenStaffPortal?: () => void;
@@ -112,9 +145,47 @@ interface CustomerViewProps {
 
 const HERO_IMG = '/src/assets/images/zorun_hero_aizawl_twilight_1795274240109.jpg';
 
+const VOICE_ORDER_PRESETS: Array<{
+  labelMiz: string;
+  labelEn: string;
+  jobType: ErrandJobType;
+  title: string;
+  note: string;
+}> = [
+  {
+    labelMiz: 'Gas cylinder lak',
+    labelEn: 'Gas Cylinder Run',
+    jobType: 'step_delivery',
+    title: 'LPG Gas cylinder lak leh in chhung thleng dah',
+    note: 'Empty cylinder ready at main gate steps.',
+  },
+  {
+    labelMiz: 'Damdawi lei',
+    labelEn: 'Urgent Pharmacy',
+    jobType: 'bike_express',
+    title: 'Pharmacy atanga damdawi lei leh thlen nghal',
+    note: 'Prescription photo ready on chat.',
+  },
+  {
+    labelMiz: 'Bazar thil lak',
+    labelEn: 'Bara Bazar Run',
+    jobType: 'step_delivery',
+    title: 'Bara Bazar chawhmeh leh thil mamawh lak',
+    note: 'Call before leaving market steps.',
+  },
+  {
+    labelMiz: 'Sumo counter-ah thil dah',
+    labelEn: 'Sumo Counter Drop',
+    jobType: 'bike_express',
+    title: 'Zarkawt / Thuampui Sumo Counter-ah parcel dah',
+    note: 'Hand over to driver and send counter receipt.',
+  },
+];
+
 export const CustomerView: React.FC<CustomerViewProps> = ({
   lang,
   selectedDistrict,
+  onChangeDistrict,
   onOpenDistrictPicker,
   activeTab,
   onChangeTab,
@@ -129,7 +200,10 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
   workforce,
   staffingBookings,
   sosTickets,
+  customerWallet,
+  sumoParcels,
   userSettings,
+  onUpdateUserSettings,
   onOpenApply,
   onOpenStaffPortal,
   onRefresh,
@@ -146,6 +220,8 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
   const [activityLayerOpen, setActivityLayerOpen] = useState(false);
   const [quickSosLayerOpen, setQuickSosLayerOpen] = useState(false);
   const [sosTicketsLayerOpen, setSosTicketsLayerOpen] = useState(false);
+  const [walletLayerOpen, setWalletLayerOpen] = useState(false);
+  const [sumoLayerOpen, setSumoLayerOpen] = useState(false);
 
   // Marketplace Layered Popups (Layer 1: Product Detail / Orders -> Layer 2: Shop Chat)
   const [selectedProduct, setSelectedProduct] = useState<MarketplaceProduct | null>(null);
@@ -178,6 +254,25 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
   const [customDest, setCustomDest] = useState<LatLng | null>(null);
   const [stops, setStops] = useState<LatLng[]>([]);
   const [accessType, setAccessType] = useState<AccessType>('long_steps_walk');
+  const [kailawnNeeded, setKailawnNeeded] = useState(false);
+  const [kailawnStepTier, setKailawnStepTier] = useState<KailawnStepTier>('steps_15_40');
+  const [pickupYmaSection, setPickupYmaSection] = useState('');
+  const [pickupNearestLandmark, setPickupNearestLandmark] = useState('');
+  const [dropYmaSection, setDropYmaSection] = useState('');
+  const [dropNearestLandmark, setDropNearestLandmark] = useState('');
+  const [locatingOriginGps, setLocatingOriginGps] = useState(false);
+  const [locatingDropGps, setLocatingDropGps] = useState(false);
+  const [liveUserGps, setLiveUserGps] = useState<LiveGpsFix | null>(null);
+  const [gpsStatusBanner, setGpsStatusBanner] = useState<string | null>(null);
+  const [pinPickerState, setPinPickerState] = useState<{ open: boolean; mode: PinPickerMode }>({
+    open: false,
+    mode: 'pickup',
+  });
+  const [gateCameraOpen, setGateCameraOpen] = useState(false);
+  const activeGpsWatcherRef = useRef<LiveLocationWatcher | null>(null);
+  const lastDistrictRef = useRef<MizoramDistrict>(selectedDistrict);
+  const skipNextDistrictResetRef = useRef(false);
+
   const [needsWalkerHelper, setNeedsWalkerHelper] = useState(false);
   const [declaredValue, setDeclaredValue] = useState('650');
   const [paymentMethod, setPaymentMethod] = useState<'upi_escrow' | 'dynamic_qr_cod'>(
@@ -188,22 +283,28 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
   const [voiceNoteTranscript, setVoiceNoteTranscript] = useState(
     'Gate beside concrete steps, blue railing on right.'
   );
-  const [isRecording, setIsRecording] = useState(false);
-  const [recordedSeconds, setRecordedSeconds] = useState(0);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const [errandVoiceNote, setErrandVoiceNote] = useState<VoiceNoteValue | null>(null);
+  const { user, effectiveRole } = useFirebaseAuth();
+  const [liveFirestoreRunnersCount, setLiveFirestoreRunnersCount] = useState<number | null>(null);
+  const [liveFirestoreOrdersCount, setLiveFirestoreOrdersCount] = useState<number | null>(null);
+  const [liveFirestoreSosCount, setLiveFirestoreSosCount] = useState<number | null>(null);
   const [estimate, setEstimate] = useState<{
     distanceKm: number;
+    durationMinutes?: number;
+    distanceSource?: 'google_routes_v2' | 'mizoram_terrain_estimate';
     allInclusiveTotal: number;
     microInsuranceFee: number;
+    kailawnSurchargeRs?: number;
     corridorMatches: Array<{ partnerId: string; name: string; corridorMeters: number; within500m: boolean }>;
   } | null>(null);
   const [submittingErrand, setSubmittingErrand] = useState(false);
   const [errandFeedback, setErrandFeedback] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null);
 
   // Marketplace State
-  const [mktDistrictFilter, setMktDistrictFilter] = useState<'all' | 'selected'>('all');
+  const [mktDistrictFilter, setMktDistrictFilter] = useState<'all' | 'selected'>('selected');
   const [selectedVengFilter, setSelectedVengFilter] = useState('All');
   const [mktInsurance, setMktInsurance] = useState(userSettings.defaultMicroInsurance);
+  const [mktVoiceNote, setMktVoiceNote] = useState<VoiceNoteValue | null>(null);
   const [mktFeedback, setMktFeedback] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null);
   const [chatDrafts, setChatDrafts] = useState<Record<string, string>>({});
   const [placingOrder, setPlacingOrder] = useState(false);
@@ -246,6 +347,45 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
   }, [sosConfirmArmed]);
 
   useEffect(() => {
+    return () => {
+      activeGpsWatcherRef.current?.stop();
+    };
+  }, []);
+
+  // Subscribe to district-scoped Firestore live collections when signed in with a verified account
+  useEffect(() => {
+    if (!user) {
+      setLiveFirestoreRunnersCount(null);
+      setLiveFirestoreOrdersCount(null);
+      setLiveFirestoreSosCount(null);
+      return;
+    }
+    const isAdmin = effectiveRole === 'SUPER_ADMIN';
+    const unsubRunners = subscribeDistrictRunners(selectedDistrict, isAdmin, (rows) => {
+      setLiveFirestoreRunnersCount(rows.length);
+    });
+    const unsubOrders = subscribeDistrictOrders(selectedDistrict, user.uid, isAdmin, (rows) => {
+      setLiveFirestoreOrdersCount(rows.length);
+    });
+    const unsubSos = subscribeDistrictSos(selectedDistrict, user.uid, isAdmin, (rows) => {
+      setLiveFirestoreSosCount(rows.length);
+    });
+    return () => {
+      unsubRunners();
+      unsubOrders();
+      unsubSos();
+    };
+  }, [user, effectiveRole, selectedDistrict]);
+
+  useEffect(() => {
+    if (lastDistrictRef.current === selectedDistrict) return;
+    lastDistrictRef.current = selectedDistrict;
+
+    if (skipNextDistrictResetRef.current) {
+      skipNextDistrictResetRef.current = false;
+      return;
+    }
+
     const vengs = getVengsForDistrict(selectedDistrict);
     if (vengs.length > 0) {
       setOriginName(vengs[0].name);
@@ -260,8 +400,23 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
     }
   }, [selectedDistrict, isInterDistrict]);
 
+  useEffect(() => {
+    const hasLocalProducts = products.some(
+      (p) => (p.district || 'Aizawl') === selectedDistrict
+    );
+    setMktDistrictFilter(hasLocalProducts ? 'selected' : 'all');
+  }, [selectedDistrict, products]);
+
   const originPoint = useMemo(() => customOrigin || findAnyMizoramVeng(originName), [customOrigin, originName]);
   const destPoint = useMemo(() => customDest || findAnyMizoramVeng(destName), [customDest, destName]);
+
+  const kailawnSurchargePreview = useMemo(() => {
+    if (!kailawnNeeded) return 0;
+    if (kailawnStepTier === 'steps_0_15') return 15;
+    if (kailawnStepTier === 'steps_15_40') return 35;
+    if (kailawnStepTier === 'steps_40_plus') return 65;
+    return 0;
+  }, [kailawnNeeded, kailawnStepTier]);
 
   // Instant client-side fare preview (0ms), plus debounced server verification when Booking or Map Layer is open
   const instantFarePreview = useMemo(() => {
@@ -275,14 +430,27 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
             : remoteConfig.baseWalkerRate;
     const helper = needsWalkerHelper ? 120 : 0;
     const ins = microInsuranceOptIn ? remoteConfig.microInsuranceSachetRs : 0;
-    return Math.round(base * remoteConfig.rainSurgeMultiplier + stops.length * 15 + helper + ins);
-  }, [jobType, remoteConfig, stops.length, needsWalkerHelper, microInsuranceOptIn]);
+    return Math.round(
+      base * remoteConfig.rainSurgeMultiplier +
+        stops.length * 15 +
+        helper +
+        kailawnSurchargePreview +
+        ins
+    );
+  }, [
+    jobType,
+    remoteConfig,
+    stops.length,
+    needsWalkerHelper,
+    kailawnSurchargePreview,
+    microInsuranceOptIn,
+  ]);
 
   useEffect(() => {
     if (!bookingSheetOpen && !mapLayerOpen) return;
     let active = true;
     const timer = setTimeout(() => {
-      fetch('/api/errands/estimate', {
+      fetch('/api/errands/fare', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -293,6 +461,8 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
           stops,
           destination: destPoint,
           needsWalkerHelper,
+          kailawnNeeded,
+          kailawnStepTier: kailawnNeeded ? kailawnStepTier : 'none',
           microInsuranceOptIn,
         }),
       })
@@ -318,24 +488,11 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
     stops,
     destPoint,
     needsWalkerHelper,
+    kailawnNeeded,
+    kailawnStepTier,
     microInsuranceOptIn,
     remoteConfig,
   ]);
-
-  useEffect(() => {
-    if (!isRecording) return;
-    const timer = setInterval(() => {
-      setRecordedSeconds((prev) => {
-        if (prev >= 14) {
-          mediaRecorderRef.current?.stop();
-          setIsRecording(false);
-          return 15;
-        }
-        return prev + 1;
-      });
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [isRecording]);
 
   const openBookingForTier = (nextType: ErrandJobType) => {
     triggerHaptic('light');
@@ -353,37 +510,114 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
     setBookingSheetOpen(true);
   };
 
-  const toggleVoiceRecording = async () => {
-    triggerHaptic('medium');
-    if (isRecording) {
-      mediaRecorderRef.current?.stop();
-      setIsRecording(false);
-      return;
+  const applyResolvedLocation = (mode: PinPickerMode, resolved: ResolvedLocationAddress) => {
+    if (!resolved.isOutsideMizoram && resolved.district !== selectedDistrict) {
+      if (mode === 'pickup' || mode === 'sos') {
+        skipNextDistrictResetRef.current = true;
+        onChangeDistrict(resolved.district);
+      } else {
+        setIsInterDistrict(true);
+      }
     }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream);
-      mediaRecorderRef.current = recorder;
-      recorder.onstop = () => {
-        stream.getTracks().forEach((tr) => tr.stop());
-      };
-      setRecordedSeconds(0);
-      setIsRecording(true);
-      recorder.start();
-    } catch {
-      setRecordedSeconds(6);
-      setVoiceNoteTranscript(
-        'Voice landmark note (6s): Walk past Chanmari transformer, descend 40 steps to tin-roofed house.'
+
+    const coordLabel = `${resolved.veng} (${resolved.lat.toFixed(4)}, ${resolved.lng.toFixed(4)})`;
+
+    if (mode === 'pickup') {
+      setOriginName(resolved.veng);
+      setCustomOrigin({
+        lat: resolved.lat,
+        lng: resolved.lng,
+        label: coordLabel,
+      });
+      setPickupNearestLandmark(resolved.landmark);
+      setPickupYmaSection((prev) => prev || `${resolved.zone} Zone`);
+      setGpsStatusBanner(
+        lang === 'miz'
+          ? `Pickup auto-filled: ${resolved.veng} (${resolved.district})${resolved.accuracyMeters ? ` · ±${resolved.accuracyMeters}m` : ''}`
+          : `Pickup auto-filled: ${resolved.veng} (${resolved.district})${resolved.accuracyMeters ? ` · ±${resolved.accuracyMeters}m` : ''}`
       );
+    } else if (mode === 'drop') {
+      setDestName(resolved.veng);
+      setCustomDest({
+        lat: resolved.lat,
+        lng: resolved.lng,
+        label: coordLabel,
+      });
+      setDropNearestLandmark(resolved.landmark);
+      setDropYmaSection((prev) => prev || `${resolved.zone} Zone`);
+      setGpsStatusBanner(
+        lang === 'miz'
+          ? `Drop auto-filled: ${resolved.veng} (${resolved.district})${resolved.accuracyMeters ? ` · ±${resolved.accuracyMeters}m` : ''}`
+          : `Drop auto-filled: ${resolved.veng} (${resolved.district})${resolved.accuracyMeters ? ` · ±${resolved.accuracyMeters}m` : ''}`
+      );
+    } else {
+      setSosVeng(resolved.veng);
+      setSosLiveGps({ lat: resolved.lat, lng: resolved.lng });
+      setSosFeedback({
+        type: 'ok',
+        msg:
+          lang === 'miz'
+            ? `SOS GPS Lock: ${resolved.veng} (${resolved.district}) · ${resolved.landmark}`
+            : `SOS GPS Locked: ${resolved.veng} (${resolved.district}) · ${resolved.landmark}`,
+      });
     }
   };
+
+  const runLiveGpsAutoFill = (target: 'pickup' | 'drop') => {
+    triggerHaptic('medium');
+    activeGpsWatcherRef.current?.stop();
+
+    if (target === 'pickup') {
+      setLocatingOriginGps(true);
+    } else {
+      setLocatingDropGps(true);
+    }
+
+    activeGpsWatcherRef.current = startLiveGpsWatch(
+      (fix) => {
+        setLiveUserGps(fix);
+        void resolveAddressFromCoords(fix.lat, fix.lng, selectedDistrict, fix.accuracyMeters).then(
+          (resolved) => {
+            applyResolvedLocation(target, resolved);
+            if (fix.quality === 'high' || fix.quality === 'medium') {
+              if (target === 'pickup') setLocatingOriginGps(false);
+              else setLocatingDropGps(false);
+              triggerHaptic('success');
+            }
+          }
+        );
+      },
+      (errMsg) => {
+        setLocatingOriginGps(false);
+        setLocatingDropGps(false);
+        setGpsStatusBanner(errMsg);
+      },
+      { maxAutoRefineMs: 9000 }
+    );
+
+    setTimeout(() => {
+      setLocatingOriginGps(false);
+      setLocatingDropGps(false);
+    }, 9200);
+  };
+
+  const handlePinOriginGps = () => runLiveGpsAutoFill('pickup');
+  const handlePinDropGps = () => runLiveGpsAutoFill('drop');
 
   const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     try {
       const webp = await compressImageToWebP(file, 800);
-      setBuildingPhotoUrl(webp);
+      const blob = await dataUrlToBlob(webp);
+      const uploaded = await uploadMediaFile({
+        file: blob,
+        filename: `gate-${Date.now()}.webp`,
+        category: 'proof_photo',
+        district: selectedDistrict,
+      });
+      setBuildingPhotoUrl(uploaded.url || webp);
+      triggerHaptic('success');
     } catch {
       setErrandFeedback({ type: 'err', msg: 'Could not process image file.' });
     }
@@ -404,10 +638,34 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
 
     setSubmittingErrand(true);
     setErrandFeedback(null);
+    const pickupLandmark: MizoramLandmarkAddress = {
+      veng: originName,
+      ymaSection: pickupYmaSection.trim() || undefined,
+      nearestLandmark: pickupNearestLandmark.trim() || undefined,
+      gpsPinned: Boolean(customOrigin),
+    };
+    const dropLandmark: MizoramLandmarkAddress = {
+      veng: destName,
+      ymaSection: dropYmaSection.trim() || undefined,
+      nearestLandmark: dropNearestLandmark.trim() || undefined,
+      gpsPinned: Boolean(customDest),
+    };
+    const combinedTranscript = [
+      errandVoiceNote?.noteText || voiceNoteTranscript,
+      dropNearestLandmark.trim() ? `Landmark: ${dropNearestLandmark.trim()}` : '',
+      dropYmaSection.trim() ? `YMA ${dropYmaSection.trim()}` : '',
+    ]
+      .filter(Boolean)
+      .join(' · ');
+
     try {
+      const idToken = getFirebaseIdToken();
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (idToken) headers['X-Firebase-Id-Token'] = idToken;
+
       const res = await fetch('/api/errands/jobs', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           title: taskTitle,
           district: selectedDistrict,
@@ -417,9 +675,15 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
           stops,
           destination: destPoint,
           accessType,
+          kailawnNeeded,
+          kailawnStepTier: kailawnNeeded ? kailawnStepTier : 'none',
+          pickupLandmark,
+          dropLandmark,
           needsWalkerHelper,
           buildingPhotoUrl: buildingPhotoUrl || undefined,
-          voiceNoteTranscript,
+          voiceNoteUrl: errandVoiceNote?.audioUrl || undefined,
+          voiceNoteDurationSec: errandVoiceNote?.durationSec || undefined,
+          voiceNoteTranscript: combinedTranscript,
           declaredValue: Number(declaredValue) || 0,
           paymentMethod,
           microInsuranceOptIn,
@@ -431,7 +695,9 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
         setErrandFeedback({ type: 'err', msg: data.error || 'Failed to create errand' });
       } else {
         triggerHaptic('success');
+        void publishLiveOrderToFirestore(data.job);
         setTitle('');
+        setErrandVoiceNote(null);
         setBookingSheetOpen(false);
         setErrandFeedback({
           type: 'ok',
@@ -488,7 +754,13 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
       const res = await fetch('/api/marketplace/orders', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ productId, microInsuranceOptIn: mktInsurance }),
+        body: JSON.stringify({
+          productId,
+          microInsuranceOptIn: mktInsurance,
+          voiceNoteUrl: mktVoiceNote?.audioUrl || undefined,
+          voiceNoteDurationSec: mktVoiceNote?.durationSec || undefined,
+          voiceNoteTranscript: mktVoiceNote?.noteText || undefined,
+        }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -501,6 +773,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
         type: 'ok',
         msg: `Order ${data.order.id} placed. ${data.order.checkBeforePay ? 'Ready for En Hmasak Phawt check at your gate.' : 'Sealed hygiene pack — direct handover.'}`,
       });
+      setMktVoiceNote(null);
       setSelectedProduct(null);
       await onRefresh();
       setOrdersLayerOpen(true);
@@ -635,9 +908,13 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
     const dispatchLat = sosLiveGps?.lat ?? vengPt.lat;
     const dispatchLng = sosLiveGps?.lng ?? vengPt.lng;
     try {
+      const idToken = getFirebaseIdToken();
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (idToken) headers['X-Firebase-Id-Token'] = idToken;
+
       const res = await fetch('/api/emergency/dispatch', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           district: selectedDistrict,
           veng: sosVeng,
@@ -654,6 +931,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
         return;
       }
       triggerHaptic('success');
+      void publishSosAlertToFirestore(data.ticket);
       setSosFeedback({
         type: 'ok',
         msg: `SOS ${data.ticket.id} dispatched in ${selectedDistrict}! ${data.ticket.assignedTechName} assigned (SLA ${data.ticket.slaTargetMinutes}m).`,
@@ -708,12 +986,29 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
     [partners, selectedDistrict, isInterDistrict]
   );
 
-  const onlinePartnerCount = districtPartners.filter((p) => p.online).length;
-  const pendingBidsCount = useMemo(
-    () => errands.reduce((sum, j) => sum + (j.status === 'bidding' ? j.bids.length : 0), 0),
-    [errands]
+  const onlinePartnerCount =
+    liveFirestoreRunnersCount !== null
+      ? Math.max(liveFirestoreRunnersCount, districtPartners.filter((p) => p.online).length)
+      : districtPartners.filter((p) => p.online).length;
+  const districtErrands = useMemo(
+    () => errands.filter((j) => (j.district || 'Aizawl') === selectedDistrict),
+    [errands, selectedDistrict]
   );
-  const latestErrand = errands[0] || null;
+  void liveFirestoreOrdersCount;
+  void liveFirestoreSosCount;
+  const homeQuickProducts = useMemo(() => {
+    const local = products.filter((p) => (p.district || 'Aizawl') === selectedDistrict);
+    return local.length > 0 ? local.slice(0, 5) : products.slice(0, 5);
+  }, [products, selectedDistrict]);
+  const hasLocalQuickProducts = useMemo(
+    () => products.some((p) => (p.district || 'Aizawl') === selectedDistrict),
+    [products, selectedDistrict]
+  );
+  const pendingBidsCount = useMemo(
+    () => districtErrands.reduce((sum, j) => sum + (j.status === 'bidding' ? j.bids.length : 0), 0),
+    [districtErrands]
+  );
+  const latestErrand = districtErrands[0] || null;
   const activeChatOrder = useMemo(
     () => orders.find((o) => o.id === activeChatOrderId) || null,
     [orders, activeChatOrderId]
@@ -933,35 +1228,28 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
 
   const handleCaptureSosGps = () => {
     triggerHaptic('medium');
-    if (typeof navigator === 'undefined' || !navigator.geolocation) {
-      setSosFeedback({
-        type: 'err',
-        msg: lang === 'miz' ? 'He browser-ah GPS a hman theih lo.' : 'GPS not available on this device.',
-      });
-      return;
-    }
+    activeGpsWatcherRef.current?.stop();
     setLocatingSosGps(true);
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        setSosLiveGps({
-          lat: Number(pos.coords.latitude.toFixed(5)),
-          lng: Number(pos.coords.longitude.toFixed(5)),
-        });
-        setLocatingSosGps(false);
-        triggerHaptic('success');
+    activeGpsWatcherRef.current = startLiveGpsWatch(
+      (fix) => {
+        setLiveUserGps(fix);
+        void resolveAddressFromCoords(fix.lat, fix.lng, selectedDistrict, fix.accuracyMeters).then(
+          (resolved) => {
+            applyResolvedLocation('sos', resolved);
+            if (fix.quality === 'high') {
+              setLocatingSosGps(false);
+              triggerHaptic('success');
+            }
+          }
+        );
       },
-      () => {
+      (errMsg) => {
         setLocatingSosGps(false);
-        setSosFeedback({
-          type: 'err',
-          msg:
-            lang === 'miz'
-              ? 'GPS hmuh theih lo — i Veng thlan hmangin a kal ang.'
-              : 'Could not lock GPS — using selected Veng coordinates.',
-        });
+        setSosFeedback({ type: 'err', msg: errMsg });
       },
-      { enableHighAccuracy: true, timeout: 6000 }
+      { maxAutoRefineMs: 9000 }
     );
+    setTimeout(() => setLocatingSosGps(false), 9200);
   };
 
   const selectSosCategory = (catId: EmergencyCategory, defaultNote: string) => {
@@ -982,7 +1270,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
       {/* Desktop Segmented Service Bar (Mobile uses native bottom tab bar) */}
       <nav
         aria-label="Customer services"
-        className="hidden md:flex items-center justify-between gap-4 rounded-2xl bg-white p-1.5 shadow-[0_2px_12px_rgba(15,23,42,0.04)]"
+        className="hidden md:flex items-center justify-between gap-4 rounded-2xl bg-white dark:bg-slate-900 border border-transparent dark:border-slate-800 p-1.5 shadow-[0_2px_12px_rgba(15,23,42,0.04)]"
       >
         <div className="flex items-center gap-1">
           <button
@@ -991,7 +1279,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
             className={`min-h-[42px] rounded-xl px-4 py-2 text-sm font-semibold transition-all whitespace-nowrap ${
               activeTab === 'errands'
                 ? 'bg-emerald-900 text-white shadow-sm'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-50 dark:hover:bg-slate-800'
             }`}
           >
             {lang === 'miz' ? 'Home & Runner' : 'Home & Errands'}
@@ -1002,7 +1290,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
             className={`min-h-[42px] rounded-xl px-4 py-2 text-sm font-semibold transition-all whitespace-nowrap ${
               activeTab === 'marketplace'
                 ? 'bg-emerald-900 text-white shadow-sm'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-50 dark:hover:bg-slate-800'
             }`}
           >
             {t.tabMarketplace}
@@ -1013,7 +1301,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
             className={`min-h-[42px] rounded-xl px-4 py-2 text-sm font-semibold transition-all whitespace-nowrap ${
               activeTab === 'workforce'
                 ? 'bg-emerald-900 text-white shadow-sm'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-50 dark:hover:bg-slate-800'
             }`}
           >
             {t.tabWorkforce}
@@ -1026,7 +1314,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
           className={`min-h-[42px] inline-flex items-center gap-1.5 rounded-xl px-4 py-2 text-sm font-bold transition-all whitespace-nowrap ${
             activeTab === 'sos'
               ? 'bg-red-600 text-white shadow-sm'
-              : 'bg-red-50 text-red-700 hover:bg-red-100'
+              : 'bg-red-50 dark:bg-red-950/60 text-red-700 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-950'
           }`}
         >
           <AlertTriangle className="w-4 h-4" />
@@ -1038,19 +1326,66 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
       {/* TAB 1: COMPACT HOME HUB (LAYERED WINDOWS — NO ENDLESS SCROLLING)      */}
       {/* ===================================================================== */}
       {activeTab === 'errands' && (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
+        <div className="space-y-4">
+          {/* Universal Bilingual Search + 1-Tap Saved Favourite Places */}
+          <UniversalSearchBar
+            lang={lang}
+            selectedDistrict={selectedDistrict}
+            products={products}
+            workforce={workforce}
+            savedPlaces={userSettings.savedPlaces}
+            onAddSavedPlace={(place: SavedPlace) => {
+              onUpdateUserSettings({
+                savedPlaces: [...userSettings.savedPlaces, place],
+              });
+            }}
+            onSelectSavedPlace={(place: SavedPlace) => {
+              if (place.district !== selectedDistrict) {
+                onChangeDistrict(place.district);
+              }
+              setDestName(place.veng);
+              setCustomDest(null);
+              if (place.landmark) {
+                setVoiceNoteTranscript(`${place.label}: ${place.landmark}`);
+              }
+              setBookingSheetOpen(true);
+            }}
+            onSelectProduct={(product) => {
+              setMktFeedback(null);
+              setSelectedProduct(product);
+            }}
+            onSelectWorker={(worker) => openWorkerModal(worker)}
+            onSelectQuickErrand={(jt, presetTitle) => {
+              openBookingForTier(jt);
+              if (presetTitle) setTitle(presetTitle);
+            }}
+            onSelectSosCategory={(cat) => {
+              setSosCategory(cat);
+              setQuickSosLayerOpen(true);
+            }}
+          />
+
+          {/* Compact Live Active Trip Tracker (4-Step Progress + 1-Tap Share + Rate & Tip) */}
+          <LiveTripTrackerBar
+            lang={lang}
+            errand={latestErrand || null}
+            onOpenDetails={(errandId) => setDetailErrandId(errandId)}
+            onRated={onRefresh}
+          />
+
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
           {/* LEFT COLUMN: Compact Hero + 4-Up Services + Quick Shops Strip */}
           <div className="lg:col-span-7 space-y-4">
             {/* Compact Visual Super-App Hero Card */}
             <section className="relative rounded-3xl overflow-hidden bg-emerald-950 shadow-[0_10px_28px_rgba(6,78,59,0.16)]">
-              <div className="relative h-48 sm:h-52">
+              <div className="relative min-h-[228px] sm:min-h-[236px]">
                 <img
                   src={HERO_IMG}
                   alt="Golden hour view over Aizawl Mizoram mountain ridges"
                   referrerPolicy="no-referrer"
                   fetchPriority="high"
                   decoding="async"
-                  className="h-full w-full object-cover"
+                  className="absolute inset-0 h-full w-full object-cover"
                 />
                 <div className="absolute inset-0 bg-gradient-to-t from-emerald-950 via-emerald-950/60 to-emerald-950/20" />
 
@@ -1066,12 +1401,15 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
                     >
                       <MapPin className="w-3.5 h-3.5 text-emerald-300" />
                       <span>
-                        {selectedDistrict} · {onlinePartnerCount}{' '}
-                        {lang === 'miz' ? 'partner hman theih' : 'partners nearby'}
+                        Chibai · {selectedDistrict} · {onlinePartnerCount}{' '}
+                        {lang === 'miz' ? 'Runner online' : 'Runners online'}
                       </span>
                     </button>
                     <span className="text-xs font-mono text-emerald-200/90 tabular-nums">
                       {districtInfo.rtoCode}
+                      {remoteConfig.rainSurgeMultiplier > 1
+                        ? ` · ${remoteConfig.rainSurgeMultiplier}x`
+                        : ''}
                     </span>
                   </div>
 
@@ -1083,26 +1421,60 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
                     </h1>
 
                     {/* Floating Action Search Bar -> Opens Booking Layer Window */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        triggerHaptic('light');
-                        setBookingSheetOpen(true);
-                      }}
-                      className="w-full min-h-[48px] rounded-2xl bg-white px-3.5 py-2 flex items-center justify-between gap-3 text-left shadow-lg active:scale-[0.99] transition-transform"
-                    >
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <Search className="w-4 h-4 text-emerald-700 shrink-0" />
-                        <span className="text-sm font-medium text-slate-600 truncate">
-                          {lang === 'miz'
-                            ? `${originName} → ${destName} · Runner emaw Motor ko...`
-                            : `${originName} → ${destName} · Book Runner or ride...`}
+                    <div className="space-y-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          triggerHaptic('light');
+                          setBookingSheetOpen(true);
+                        }}
+                        className="w-full min-h-[48px] rounded-2xl bg-white dark:bg-slate-900 px-3.5 py-2 flex items-center justify-between gap-3 text-left shadow-lg active:scale-[0.99] transition-transform"
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <Search className="w-4 h-4 text-emerald-700 dark:text-emerald-400 shrink-0" />
+                          <span className="text-[13px] sm:text-sm font-medium text-slate-600 dark:text-slate-300 truncate">
+                            {lang === 'miz'
+                              ? `${originName.replace(/\s*\([^)]*\)$/, '')} → ${destName.replace(/\s*\([^)]*\)$/, '')} · Runner / Motor`
+                              : `${originName.replace(/\s*\([^)]*\)$/, '')} → ${destName.replace(/\s*\([^)]*\)$/, '')} · Book now`}
+                          </span>
+                        </div>
+                        <span className="rounded-xl bg-emerald-800 px-3 py-1.5 text-xs font-bold text-white whitespace-nowrap shrink-0">
+                          {lang === 'miz' ? 'Ko Rawh' : 'Book'}
                         </span>
+                      </button>
+
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={handlePinOriginGps}
+                          className="min-h-[34px] rounded-xl bg-white/15 hover:bg-white/25 backdrop-blur-xs px-3 py-1 text-[11px] font-bold text-white inline-flex items-center gap-1.5 transition-colors"
+                        >
+                          <Crosshair className="w-3.5 h-3.5 text-emerald-300" />
+                          <span>
+                            {locatingOriginGps
+                              ? lang === 'miz'
+                                ? 'Live GPS Lock mek...'
+                                : 'Updating Live GPS...'
+                              : liveUserGps
+                                ? `Live GPS ±${liveUserGps.accuracyMeters}m`
+                                : lang === 'miz'
+                                  ? 'Live GPS Auto-Fill'
+                                  : 'Live GPS Auto-Fill'}
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            triggerHaptic('light');
+                            setPinPickerState({ open: true, mode: 'pickup' });
+                          }}
+                          className="min-h-[34px] rounded-xl bg-white/15 hover:bg-white/25 backdrop-blur-xs px-3 py-1 text-[11px] font-bold text-white inline-flex items-center gap-1.5 transition-colors"
+                        >
+                          <MapPin className="w-3.5 h-3.5 text-emerald-300" />
+                          <span>{lang === 'miz' ? 'Map-ah Pin Rawh' : 'Pin Location on Map'}</span>
+                        </button>
                       </div>
-                      <span className="rounded-xl bg-emerald-800 px-3 py-1.5 text-xs font-bold text-white whitespace-nowrap shrink-0">
-                        {lang === 'miz' ? 'Ko Rawh' : 'Book'}
-                      </span>
-                    </button>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1115,15 +1487,15 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
                   key={tile.id}
                   type="button"
                   onClick={() => openBookingForTier(tile.id)}
-                  className="rounded-2xl bg-white p-2.5 sm:p-3.5 flex flex-col items-center text-center shadow-[0_2px_10px_rgba(15,23,42,0.04)] hover:shadow-[0_6px_18px_rgba(15,23,42,0.07)] active:scale-[0.96] transition-all"
+                  className="rounded-2xl bg-white dark:bg-slate-900 border border-transparent dark:border-slate-800 p-2.5 sm:p-3.5 flex flex-col items-center text-center shadow-[0_2px_10px_rgba(15,23,42,0.04)] hover:shadow-[0_6px_18px_rgba(15,23,42,0.07)] active:scale-[0.96] transition-all"
                 >
-                  <div className={`w-11 h-11 rounded-2xl ${tile.tint} flex items-center justify-center mb-1.5`}>
+                  <div className={`w-11 h-11 rounded-2xl ${tile.tint} dark:bg-slate-800 flex items-center justify-center mb-1.5`}>
                     {tile.icon}
                   </div>
-                  <span className="text-xs font-bold text-slate-900 leading-tight whitespace-nowrap">
+                  <span className="text-xs font-bold text-slate-900 dark:text-slate-100 leading-tight whitespace-nowrap">
                     {tile.label}
                   </span>
-                  <span className="text-[11px] text-slate-500 mt-0.5 font-mono tabular-nums">
+                  <span className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 font-mono tabular-nums">
                     ₹{tile.price}+
                   </span>
                 </button>
@@ -1136,7 +1508,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
                 className={`rounded-2xl px-4 py-3 text-xs font-semibold flex items-center justify-between gap-3 ${
                   errandFeedback.type === 'ok'
                     ? 'bg-emerald-900 text-white'
-                    : 'bg-red-50 text-red-800 border border-red-200'
+                    : 'bg-red-50 dark:bg-red-950/60 text-red-800 dark:text-red-300 border border-red-200 dark:border-red-900'
                 }`}
               >
                 <span>{errandFeedback.msg}</span>
@@ -1151,17 +1523,23 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
               </div>
             )}
 
-            {/* Single-Row Horizontal Quick Shops Strip (Tapping opens Product Detail Popup directly) */}
-            {products.length > 0 && (
+            {/* Single-Row Horizontal Quick Shops Strip (Synchronized to active District) */}
+            {homeQuickProducts.length > 0 && (
               <section className="space-y-2">
                 <div className="flex items-center justify-between px-0.5">
-                  <h2 className="text-sm font-bold text-slate-900">
-                    {lang === 'miz' ? 'Bazar Thil Thlan Bik' : 'Quick Local Shops'}
+                  <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                    {hasLocalQuickProducts
+                      ? lang === 'miz'
+                        ? `${selectedDistrict} Dawr & Bazar`
+                        : `${selectedDistrict} Local Shops`
+                      : lang === 'miz'
+                        ? 'Mizoram Bazar (Sumo Deliver)'
+                        : 'Mizoram Shops (Sumo Delivery)'}
                   </h2>
                   <button
                     type="button"
                     onClick={() => onChangeTab('marketplace')}
-                    className="text-xs font-semibold text-emerald-800 inline-flex items-center gap-0.5 min-h-[32px]"
+                    className="text-xs font-semibold text-emerald-800 dark:text-emerald-400 inline-flex items-center gap-0.5 min-h-[32px]"
                   >
                     {lang === 'miz' ? 'En vek' : 'All shops'}
                     <ChevronRight className="w-3.5 h-3.5" />
@@ -1169,7 +1547,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
                 </div>
 
                 <div className="flex gap-2.5 overflow-x-auto no-scrollbar pb-1 -mx-4 px-4 sm:mx-0 sm:px-0">
-                  {products.slice(0, 5).map((item) => (
+                  {homeQuickProducts.map((item) => (
                     <button
                       key={item.id}
                       type="button"
@@ -1178,9 +1556,9 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
                         setMktFeedback(null);
                         setSelectedProduct(item);
                       }}
-                      className="min-w-[152px] max-w-[152px] sm:min-w-[168px] rounded-2xl bg-white overflow-hidden shadow-[0_2px_10px_rgba(15,23,42,0.04)] text-left flex flex-col justify-between shrink-0 active:scale-[0.97] transition-transform"
+                      className="min-w-[152px] max-w-[152px] sm:min-w-[168px] rounded-2xl bg-white dark:bg-slate-900 border border-transparent dark:border-slate-800 overflow-hidden shadow-[0_2px_10px_rgba(15,23,42,0.04)] text-left flex flex-col justify-between shrink-0 active:scale-[0.97] transition-transform"
                     >
-                      <div className="aspect-[16/10] bg-slate-100 overflow-hidden">
+                      <div className="aspect-[16/10] bg-slate-100 dark:bg-slate-800 overflow-hidden">
                         <img
                           src={item.imageUrl}
                           alt={item.titleEn}
@@ -1191,11 +1569,13 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
                         />
                       </div>
                       <div className="p-2.5 space-y-0.5">
-                        <p className="text-[11px] text-slate-500 truncate">{item.veng}</p>
-                        <p className="text-xs font-bold text-slate-900 line-clamp-1">
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                          {item.veng} · {item.district || 'Aizawl'}
+                        </p>
+                        <p className="text-xs font-bold text-slate-900 dark:text-slate-100 line-clamp-1">
                           {lang === 'miz' ? item.titleMiz : item.titleEn}
                         </p>
-                        <p className="text-xs font-extrabold font-mono tabular-nums text-emerald-800 pt-0.5">
+                        <p className="text-xs font-extrabold font-mono tabular-nums text-emerald-800 dark:text-emerald-400 pt-0.5">
                           ₹{item.price}
                         </p>
                       </div>
@@ -1210,8 +1590,75 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
           <div className="lg:col-span-5 space-y-4">
             <section
               aria-label="Quick Layer Windows"
-              className="rounded-3xl bg-white shadow-[0_2px_14px_rgba(15,23,42,0.05)] divide-y divide-slate-100 overflow-hidden"
+              className="rounded-3xl bg-white dark:bg-slate-900 border border-transparent dark:border-slate-800 shadow-[0_2px_14px_rgba(15,23,42,0.05)] divide-y divide-slate-100 dark:divide-slate-800 overflow-hidden"
             >
+              {/* Row 0A: ZoRûn Wallet & Referral Rewards */}
+              <button
+                type="button"
+                onClick={() => {
+                  triggerHaptic('light');
+                  setWalletLayerOpen(true);
+                }}
+                className="w-full min-h-[68px] px-4 py-3.5 flex items-center justify-between gap-3 text-left hover:bg-slate-50/80 dark:hover:bg-slate-800/60 active:bg-slate-100/70 transition-colors"
+              >
+                <div className="flex items-center gap-3.5 min-w-0">
+                  <div className="w-10 h-10 rounded-2xl bg-emerald-900 text-emerald-200 flex items-center justify-center shrink-0">
+                    <Wallet className="w-5 h-5" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-sm font-bold text-slate-900 dark:text-slate-100 truncate">
+                      {lang === 'miz' ? 'ZoRûn Wallet & Referral ₹50' : 'ZoRûn Wallet & Rewards'}
+                    </p>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5">
+                      {customerWallet.loyaltyPoints} pts ·{' '}
+                      {customerWallet.plusPassActive
+                        ? 'Plus Pass Active'
+                        : lang === 'miz'
+                          ? 'Top-up · Thian sawm +₹50'
+                          : 'Top-up · Refer +₹50'}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <span className="text-xs font-extrabold font-mono tabular-nums text-emerald-800 dark:text-emerald-400">
+                    ₹{customerWallet.balanceRs.toLocaleString()}
+                  </span>
+                  <ChevronRight className="w-4 h-4 text-slate-400" />
+                </div>
+              </button>
+
+              {/* Row 0B: Inter-District Sumo / Counter Parcel Bridge */}
+              <button
+                type="button"
+                onClick={() => {
+                  triggerHaptic('light');
+                  setSumoLayerOpen(true);
+                }}
+                className="w-full min-h-[68px] px-4 py-3.5 flex items-center justify-between gap-3 text-left hover:bg-slate-50/80 dark:hover:bg-slate-800/60 active:bg-slate-100/70 transition-colors"
+              >
+                <div className="flex items-center gap-3.5 min-w-0">
+                  <div className="w-10 h-10 rounded-2xl bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-400 flex items-center justify-center shrink-0">
+                    <Package className="w-5 h-5" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-sm font-bold text-slate-900 dark:text-slate-100 truncate">
+                      {lang === 'miz' ? 'Sumo Counter Parcel Bridge' : 'Inter-District Sumo Parcel'}
+                    </p>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5">
+                      {lang === 'miz'
+                        ? 'Aizawl ↔ District 11 Sumo thil thawnna'
+                        : 'Home pickup → Sumo counter → 11 Districts'}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <span className="text-xs font-bold font-mono tabular-nums text-amber-700 dark:text-amber-400">
+                    {sumoParcels.length}
+                  </span>
+                  <ChevronRight className="w-4 h-4 text-slate-400" />
+                </div>
+              </button>
+
               {/* Row 1: Live Map Layer Window */}
               <button
                 type="button"
@@ -1219,23 +1666,23 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
                   triggerHaptic('light');
                   setMapLayerOpen(true);
                 }}
-                className="w-full min-h-[68px] px-4 py-3.5 flex items-center justify-between gap-3 text-left hover:bg-slate-50/80 active:bg-slate-100/70 transition-colors"
+                className="w-full min-h-[68px] px-4 py-3.5 flex items-center justify-between gap-3 text-left hover:bg-slate-50/80 dark:hover:bg-slate-800/60 active:bg-slate-100/70 transition-colors"
               >
                 <div className="flex items-center gap-3.5 min-w-0">
-                  <div className="w-10 h-10 rounded-2xl bg-emerald-50 text-emerald-700 flex items-center justify-center shrink-0">
+                  <div className="w-10 h-10 rounded-2xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 flex items-center justify-center shrink-0">
                     <MapIcon className="w-5 h-5" />
                   </div>
                   <div className="min-w-0">
-                    <p className="text-sm font-bold text-slate-900 truncate">
+                    <p className="text-sm font-bold text-slate-900 dark:text-slate-100 truncate">
                       {lang === 'miz' ? `${selectedDistrict} Live Map` : `${selectedDistrict} Live Map`}
                     </p>
-                    <p className="text-xs text-slate-500 truncate mt-0.5">
+                    <p className="text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5">
                       {originName} → {destName} · {onlinePartnerCount} online
                     </p>
                   </div>
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
-                  <span className="text-xs font-extrabold font-mono tabular-nums text-emerald-800">
+                  <span className="text-xs font-extrabold font-mono tabular-nums text-emerald-800 dark:text-emerald-400">
                     ₹{estimate?.allInclusiveTotal ?? instantFarePreview}
                   </span>
                   <ChevronRight className="w-4 h-4 text-slate-400" />
@@ -1249,18 +1696,18 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
                   triggerHaptic('light');
                   setActivityLayerOpen(true);
                 }}
-                className="w-full min-h-[68px] px-4 py-3.5 flex items-center justify-between gap-3 text-left hover:bg-slate-50/80 active:bg-slate-100/70 transition-colors"
+                className="w-full min-h-[68px] px-4 py-3.5 flex items-center justify-between gap-3 text-left hover:bg-slate-50/80 dark:hover:bg-slate-800/60 active:bg-slate-100/70 transition-colors"
               >
                 <div className="flex items-center gap-3.5 min-w-0">
-                  <div className="w-10 h-10 rounded-2xl bg-sky-50 text-sky-700 flex items-center justify-center shrink-0">
+                  <div className="w-10 h-10 rounded-2xl bg-sky-50 dark:bg-sky-950/60 text-sky-700 dark:text-sky-400 flex items-center justify-center shrink-0">
                     <Activity className="w-5 h-5" />
                   </div>
                   <div className="min-w-0">
-                    <p className="text-sm font-bold text-slate-900 truncate">
+                    <p className="text-sm font-bold text-slate-900 dark:text-slate-100 truncate">
                       {lang === 'miz' ? 'Order & Partner Bid-te' : 'Live Activity & Bids'}
                     </p>
-                    <p className="text-xs text-slate-500 truncate mt-0.5">
-                      {errands.length} {lang === 'miz' ? 'kal mek' : 'active'}
+                    <p className="text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5">
+                      {districtErrands.length} {lang === 'miz' ? `${selectedDistrict}-ah kal mek` : `in ${selectedDistrict}`}
                       {pendingBidsCount > 0
                         ? ` · ${pendingBidsCount} ${lang === 'miz' ? 'bid thar' : 'partner offers'}`
                         : latestErrand
@@ -1270,8 +1717,8 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
                   </div>
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
-                  <span className="text-xs font-bold font-mono tabular-nums text-slate-700">
-                    {errands.length}
+                  <span className="text-xs font-bold font-mono tabular-nums text-slate-700 dark:text-slate-300">
+                    {districtErrands.length}
                   </span>
                   <ChevronRight className="w-4 h-4 text-slate-400" />
                 </div>
@@ -1284,17 +1731,17 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
                   triggerHaptic('sos');
                   setQuickSosLayerOpen(true);
                 }}
-                className="w-full min-h-[68px] px-4 py-3.5 flex items-center justify-between gap-3 text-left hover:bg-red-50/60 active:bg-red-50 transition-colors"
+                className="w-full min-h-[68px] px-4 py-3.5 flex items-center justify-between gap-3 text-left hover:bg-red-50/60 dark:hover:bg-red-950/30 active:bg-red-50 transition-colors"
               >
                 <div className="flex items-center gap-3.5 min-w-0">
                   <div className="w-10 h-10 rounded-2xl bg-red-600 text-white flex items-center justify-center shrink-0">
                     <AlertTriangle className="w-5 h-5" />
                   </div>
                   <div className="min-w-0">
-                    <p className="text-sm font-bold text-red-700 truncate">
+                    <p className="text-sm font-bold text-red-700 dark:text-red-400 truncate">
                       {lang === 'miz' ? '24×7 Emergency SOS Popup' : '24×7 Rapid Emergency SOS'}
                     </p>
-                    <p className="text-xs text-slate-500 truncate mt-0.5">
+                    <p className="text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5">
                       {lang === 'miz'
                         ? 'Ambulance · Gas Put · Leimin · Plumber · 12 Services'
                         : 'Ambulance · Gas Leak · Landslide · Tow · 12 Services'}
@@ -1303,7 +1750,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
                   {sosTickets.length > 0 && (
-                    <span className="text-xs font-bold font-mono tabular-nums text-red-600">
+                    <span className="text-xs font-bold font-mono tabular-nums text-red-600 dark:text-red-400">
                       {sosTickets.length}
                     </span>
                   )}
@@ -1320,16 +1767,16 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
                   triggerHaptic('light');
                   setOrdersLayerOpen(true);
                 }}
-                className="rounded-2xl bg-white p-3.5 text-left shadow-[0_2px_10px_rgba(15,23,42,0.04)] hover:bg-slate-50 active:scale-[0.98] transition-all flex items-center justify-between gap-2"
+                className="rounded-2xl bg-white dark:bg-slate-900 border border-transparent dark:border-slate-800 p-3.5 text-left shadow-[0_2px_10px_rgba(15,23,42,0.04)] hover:bg-slate-50 dark:hover:bg-slate-800 active:scale-[0.98] transition-all flex items-center justify-between gap-2"
               >
                 <div className="min-w-0">
-                  <div className="flex items-center gap-1.5 text-emerald-800">
+                  <div className="flex items-center gap-1.5 text-emerald-800 dark:text-emerald-400">
                     <ShoppingBag className="w-4 h-4 shrink-0" />
                     <span className="text-xs font-bold truncate">
                       {lang === 'miz' ? 'Bazar Orders' : 'Shop Orders'}
                     </span>
                   </div>
-                  <p className="text-[11px] text-slate-500 mt-1 truncate">
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 truncate">
                     {orders.length} {lang === 'miz' ? 'order · Chat' : 'orders · Chat'}
                   </p>
                 </div>
@@ -1342,22 +1789,23 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
                   triggerHaptic('light');
                   setContractsLayerOpen(true);
                 }}
-                className="rounded-2xl bg-white p-3.5 text-left shadow-[0_2px_10px_rgba(15,23,42,0.04)] hover:bg-slate-50 active:scale-[0.98] transition-all flex items-center justify-between gap-2"
+                className="rounded-2xl bg-white dark:bg-slate-900 border border-transparent dark:border-slate-800 p-3.5 text-left shadow-[0_2px_10px_rgba(15,23,42,0.04)] hover:bg-slate-50 dark:hover:bg-slate-800 active:scale-[0.98] transition-all flex items-center justify-between gap-2"
               >
                 <div className="min-w-0">
-                  <div className="flex items-center gap-1.5 text-slate-900">
-                    <Briefcase className="w-4 h-4 shrink-0 text-emerald-800" />
+                  <div className="flex items-center gap-1.5 text-slate-900 dark:text-slate-100">
+                    <Briefcase className="w-4 h-4 shrink-0 text-emerald-800 dark:text-emerald-400" />
                     <span className="text-xs font-bold truncate">
                       {lang === 'miz' ? 'Awmpui Contract' : 'Staff Contracts'}
                     </span>
                   </div>
-                  <p className="text-[11px] text-slate-500 mt-1 truncate">
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 truncate">
                     {staffingBookings.length} {lang === 'miz' ? 'kal mek' : 'active'}
                   </p>
                 </div>
                 <ChevronRight className="w-4 h-4 text-slate-400 shrink-0" />
               </button>
             </div>
+          </div>
           </div>
         </div>
       )}
@@ -1775,24 +2223,37 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <div className="flex items-center justify-between mb-1">
+                <div className="flex items-center justify-between gap-2 mb-1">
                   <label htmlFor="sos-veng" className="block text-xs font-bold text-slate-700">
                     {lang === 'miz' ? `I Awmna Veng (${selectedDistrict})` : `Your Veng (${selectedDistrict})`}
                   </label>
-                  <button
-                    type="button"
-                    onClick={handleCaptureSosGps}
-                    className="inline-flex items-center gap-1 text-[11px] font-bold text-red-600 hover:text-red-700"
-                  >
-                    <Crosshair className="w-3 h-3" />
-                    {locatingSosGps
-                      ? 'GPS...'
-                      : sosLiveGps
-                        ? 'GPS Locked'
-                        : lang === 'miz'
-                          ? 'Live GPS'
-                          : 'Use GPS'}
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleCaptureSosGps}
+                      className="inline-flex items-center gap-1 text-[11px] font-bold text-red-600 hover:text-red-700"
+                    >
+                      <Crosshair className="w-3 h-3" />
+                      {locatingSosGps
+                        ? 'Locking...'
+                        : sosLiveGps
+                          ? `GPS ✓${liveUserGps ? ` ±${liveUserGps.accuracyMeters}m` : ''}`
+                          : lang === 'miz'
+                            ? 'Live GPS'
+                            : 'Use GPS'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        triggerHaptic('light');
+                        setPinPickerState({ open: true, mode: 'sos' });
+                      }}
+                      className="inline-flex items-center gap-1 text-[11px] font-bold text-slate-700 hover:text-red-700"
+                    >
+                      <MapPin className="w-3 h-3" />
+                      <span>{lang === 'miz' ? 'Map Pin' : 'Map'}</span>
+                    </button>
+                  </div>
                 </div>
                 <select
                   id="sos-veng"
@@ -1924,8 +2385,15 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
         footer={
           <div className="flex items-center justify-between gap-4">
             <div>
-              <p className="text-[11px] text-slate-500">All-Inclusive Fare</p>
-              <p className="text-2xl font-extrabold font-mono tabular-nums text-slate-900">
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                All-Inclusive Fare
+                {(estimate?.kailawnSurchargeRs ?? kailawnSurchargePreview) > 0 && (
+                  <span className="ml-1 font-semibold text-amber-700 dark:text-amber-400">
+                    (incl. +₹{estimate?.kailawnSurchargeRs ?? kailawnSurchargePreview} Kailawn)
+                  </span>
+                )}
+              </p>
+              <p className="text-2xl font-extrabold font-mono tabular-nums text-slate-900 dark:text-white">
                 ₹{estimate?.allInclusiveTotal ?? instantFarePreview}
               </p>
             </div>
@@ -1972,7 +2440,34 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
             })}
           </div>
 
-          <div className="rounded-2xl bg-slate-50 p-3.5 space-y-3 border border-slate-200/70">
+          {/* Voice-First Mizo Quick Order Presets */}
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 inline-flex items-center gap-1">
+                <Mic className="w-3 h-3 text-emerald-700 dark:text-emerald-400" />
+                {lang === 'miz' ? '1-Tap Mizo Quick Presets' : '1-Tap Mizoram Quick Presets'}
+              </span>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {VOICE_ORDER_PRESETS.map((preset) => (
+                <button
+                  key={preset.labelEn}
+                  type="button"
+                  onClick={() => {
+                    triggerHaptic('light');
+                    setJobType(preset.jobType);
+                    setTitle(preset.title);
+                    setVoiceNoteTranscript(preset.note);
+                  }}
+                  className="min-h-[34px] rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 hover:border-emerald-700 dark:hover:border-emerald-500 px-2.5 py-1 text-[11px] font-semibold text-slate-800 dark:text-slate-200 transition-colors"
+                >
+                  {lang === 'miz' ? preset.labelMiz : preset.labelEn}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-2xl bg-slate-50 dark:bg-slate-800/60 p-3.5 space-y-3 border border-slate-200/70 dark:border-slate-700">
             <div className="flex items-center justify-between gap-2">
               <span className="text-xs font-bold text-slate-700">
                 {lang === 'miz' ? 'Kalna Tur (Route)' : 'Pickup & Drop Veng'}
@@ -2006,69 +2501,198 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
               </label>
             </div>
 
-            <div className="space-y-2">
-              <div className="flex items-center gap-2.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-600 shrink-0" />
-                <select
-                  aria-label="Pickup Veng"
-                  value={originName}
-                  onChange={(e) => {
-                    setOriginName(e.target.value);
-                    setCustomOrigin(null);
-                  }}
-                  className="w-full min-h-[44px] rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-900 focus:border-emerald-700 focus:outline-none"
-                >
-                  {isInterDistrict
-                    ? MIZORAM_DISTRICTS.map((d) => (
-                        <optgroup key={d.district} label={d.district}>
-                          {d.vengs.map((v) => (
-                            <option key={v.name} value={v.name}>
-                              {v.name} ({d.district})
-                            </option>
-                          ))}
-                        </optgroup>
-                      ))
-                    : districtVengs.map((v) => (
-                        <option key={v.name} value={v.name}>
-                          From: {v.name} ({v.elevationM}m)
-                        </option>
-                      ))}
-                </select>
+            <div className="space-y-2.5">
+              {/* Pickup Row with GPS Auto-Fill & Google Map Pin Popup Button */}
+              <div className="space-y-1">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[11px] font-bold text-emerald-800 dark:text-emerald-400">
+                    {lang === 'miz' ? 'Pickup (A)' : 'Pickup (A)'}
+                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={handlePinOriginGps}
+                      className="min-h-[28px] rounded-lg border border-emerald-200 dark:border-emerald-800 bg-white dark:bg-slate-900 px-2 py-0.5 text-[11px] font-bold text-emerald-800 dark:text-emerald-400 hover:bg-emerald-50 inline-flex items-center gap-1"
+                    >
+                      <Crosshair className="w-3 h-3" />
+                      {locatingOriginGps
+                        ? 'Refining...'
+                        : customOrigin
+                          ? 'GPS ✓'
+                          : 'Live GPS'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        triggerHaptic('light');
+                        setPinPickerState({ open: true, mode: 'pickup' });
+                      }}
+                      className="min-h-[28px] rounded-lg bg-emerald-800 px-2.5 py-0.5 text-[11px] font-bold text-white hover:bg-emerald-900 inline-flex items-center gap-1"
+                    >
+                      <MapPin className="w-3 h-3" />
+                      <span>{lang === 'miz' ? 'Pin on Map' : 'Pin on Map'}</span>
+                    </button>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-600 shrink-0" />
+                  <select
+                    aria-label="Pickup Veng"
+                    value={originName}
+                    onChange={(e) => {
+                      setOriginName(e.target.value);
+                      setCustomOrigin(null);
+                    }}
+                    className="w-full min-h-[44px] rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-sm font-medium text-slate-900 dark:text-slate-100 focus:border-emerald-700 focus:outline-none"
+                  >
+                    {isInterDistrict
+                      ? MIZORAM_DISTRICTS.map((d) => (
+                          <optgroup key={d.district} label={d.district}>
+                            {d.vengs.map((v) => (
+                              <option key={v.name} value={v.name}>
+                                {v.name} ({d.district})
+                              </option>
+                            ))}
+                          </optgroup>
+                        ))
+                      : districtVengs.map((v) => (
+                          <option key={v.name} value={v.name}>
+                            From: {v.name} ({v.elevationM}m)
+                          </option>
+                        ))}
+                  </select>
+                </div>
               </div>
 
-              <div className="flex items-center gap-2.5">
-                <span className="w-2.5 h-2.5 rounded-xs bg-slate-900 shrink-0" />
-                <select
-                  aria-label="Drop Veng"
-                  value={destName}
-                  onChange={(e) => {
-                    setDestName(e.target.value);
-                    setCustomDest(null);
-                  }}
-                  className="w-full min-h-[44px] rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-900 focus:border-emerald-700 focus:outline-none"
+              {/* Drop Row with GPS Auto-Fill & Google Map Pin Popup Button */}
+              <div className="space-y-1">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[11px] font-bold text-slate-700 dark:text-slate-300">
+                    {lang === 'miz' ? 'Drop (B)' : 'Drop (B)'}
+                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={handlePinDropGps}
+                      className="min-h-[28px] rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-0.5 text-[11px] font-bold text-slate-800 dark:text-slate-200 hover:bg-slate-100 inline-flex items-center gap-1"
+                    >
+                      <Crosshair className="w-3 h-3 text-emerald-700 dark:text-emerald-400" />
+                      {locatingDropGps
+                        ? 'Refining...'
+                        : customDest
+                          ? 'GPS ✓'
+                          : 'Live GPS'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        triggerHaptic('light');
+                        setPinPickerState({ open: true, mode: 'drop' });
+                      }}
+                      className="min-h-[28px] rounded-lg bg-slate-900 dark:bg-emerald-700 px-2.5 py-0.5 text-[11px] font-bold text-white hover:bg-slate-800 inline-flex items-center gap-1"
+                    >
+                      <MapPin className="w-3 h-3" />
+                      <span>{lang === 'miz' ? 'Pin on Map' : 'Pin on Map'}</span>
+                    </button>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2.5">
+                  <span className="w-2.5 h-2.5 rounded-xs bg-slate-900 dark:bg-emerald-400 shrink-0" />
+                  <select
+                    aria-label="Drop Veng"
+                    value={destName}
+                    onChange={(e) => {
+                      setDestName(e.target.value);
+                      setCustomDest(null);
+                    }}
+                    className="w-full min-h-[44px] rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-sm font-medium text-slate-900 dark:text-slate-100 focus:border-emerald-700 focus:outline-none"
+                  >
+                    {isInterDistrict
+                      ? MIZORAM_DISTRICTS.map((d) => (
+                          <optgroup key={d.district} label={d.district}>
+                            {d.vengs.map((v) => (
+                              <option key={v.name} value={v.name}>
+                                {v.name} ({d.district})
+                              </option>
+                            ))}
+                          </optgroup>
+                        ))
+                      : districtVengs.map((v) => (
+                          <option key={v.name} value={v.name}>
+                            To: {v.name} ({v.elevationM}m)
+                          </option>
+                        ))}
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            {gpsStatusBanner && (
+              <div className="rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 px-3 py-2 text-[11px] font-semibold text-emerald-900 dark:text-emerald-300 flex items-center justify-between gap-2">
+                <span>{gpsStatusBanner}</span>
+                <button
+                  type="button"
+                  onClick={() => setGpsStatusBanner(null)}
+                  className="text-emerald-700 dark:text-emerald-400 font-bold"
                 >
-                  {isInterDistrict
-                    ? MIZORAM_DISTRICTS.map((d) => (
-                        <optgroup key={d.district} label={d.district}>
-                          {d.vengs.map((v) => (
-                            <option key={v.name} value={v.name}>
-                              {v.name} ({d.district})
-                            </option>
-                          ))}
-                        </optgroup>
-                      ))
-                    : districtVengs.map((v) => (
-                        <option key={v.name} value={v.name}>
-                          To: {v.name} ({v.elevationM}m)
-                        </option>
-                      ))}
-                </select>
+                  ×
+                </button>
+              </div>
+            )}
+
+            {/* Landmark-First Mizoram Addressing (Veng + YMA Section + Nearest Biak In / Tuikhur / Kawn + GPS Pin) */}
+            <div className="pt-2 border-t border-slate-200/80 dark:border-slate-700 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 inline-flex items-center gap-1">
+                  <MapPin className="w-3 h-3 text-emerald-700 dark:text-emerald-400" />
+                  {lang === 'miz'
+                    ? 'Mizoram Landmark Address (Auto-Fill / Editable)'
+                    : 'Landmark-First Address (Auto-Fill / Editable)'}
+                </span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <input
+                  type="text"
+                  value={dropYmaSection}
+                  onChange={(e) => setDropYmaSection(e.target.value)}
+                  placeholder={lang === 'miz' ? 'Drop YMA Section (e.g. Section II)' : 'Drop YMA Section (e.g. Section II)'}
+                  className="w-full min-h-[40px] rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-1.5 text-xs text-slate-900 dark:text-slate-100 focus:border-emerald-700 focus:outline-none"
+                />
+                <input
+                  type="text"
+                  value={dropNearestLandmark}
+                  onChange={(e) => setDropNearestLandmark(e.target.value)}
+                  placeholder={
+                    lang === 'miz'
+                      ? 'Drop Biak In / Tuikhur / Kawn hnai ber'
+                      : 'Drop Landmark (Biak In / Tuikhur / Kawn)'
+                  }
+                  className="w-full min-h-[40px] rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-1.5 text-xs text-slate-900 dark:text-slate-100 focus:border-emerald-700 focus:outline-none"
+                />
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <input
+                  type="text"
+                  value={pickupYmaSection}
+                  onChange={(e) => setPickupYmaSection(e.target.value)}
+                  placeholder={lang === 'miz' ? 'Pickup YMA Section (Optional)' : 'Pickup YMA Section (Optional)'}
+                  className="w-full min-h-[38px] rounded-xl border border-slate-200/80 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-1.5 text-[11px] text-slate-800 dark:text-slate-200 focus:border-emerald-700 focus:outline-none"
+                />
+                <input
+                  type="text"
+                  value={pickupNearestLandmark}
+                  onChange={(e) => setPickupNearestLandmark(e.target.value)}
+                  placeholder={lang === 'miz' ? 'Pickup Biak In / Kawn (Optional)' : 'Pickup Landmark (Optional)'}
+                  className="w-full min-h-[38px] rounded-xl border border-slate-200/80 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-1.5 text-[11px] text-slate-800 dark:text-slate-200 focus:border-emerald-700 focus:outline-none"
+                />
               </div>
             </div>
 
             <div className="flex items-center justify-between pt-1">
-              <span className="text-xs text-slate-500">
-                Est. {estimate?.distanceKm ?? 1.2} km · {stops.length} stops
+              <span className="text-xs text-slate-500 dark:text-slate-400">
+                Est. {estimate?.distanceKm ?? 1.2} km
+                {typeof estimate?.durationMinutes === 'number' ? ` · ~${estimate.durationMinutes} min` : ''}
+                {estimate?.distanceSource === 'google_routes_v2' ? ' (Routes v2)' : ''} · {stops.length} stops
               </span>
               <button
                 type="button"
@@ -2077,7 +2701,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
                   const nextVeng = districtVengs[(stops.length + 2) % districtVengs.length];
                   setStops((prev) => [...prev, { lat: nextVeng.lat, lng: nextVeng.lng, label: nextVeng.name }]);
                 }}
-                className="inline-flex items-center gap-1 text-xs font-bold text-emerald-800 hover:text-emerald-700 min-h-[32px]"
+                className="inline-flex items-center gap-1 text-xs font-bold text-emerald-800 dark:text-emerald-400 hover:text-emerald-700 min-h-[32px]"
               >
                 <Plus className="w-3.5 h-3.5" />
                 {t.addStop}
@@ -2087,7 +2711,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
             {stops.map((st, idx) => (
               <div
                 key={idx}
-                className="flex items-center justify-between rounded-xl bg-white px-3 py-2 text-xs text-slate-700 border border-slate-200/80"
+                className="flex items-center justify-between rounded-xl bg-white dark:bg-slate-900 px-3 py-2 text-xs text-slate-700 dark:text-slate-200 border border-slate-200/80 dark:border-slate-700"
               >
                 <span>
                   Stop {idx + 1}: {st.label}
@@ -2104,8 +2728,81 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
             ))}
           </div>
 
+          {/* Kailawn / Step Access Accessibility Toggle & Fair Terrain Surcharge Selector */}
+          <div className="rounded-2xl border border-amber-200/90 dark:border-amber-900/70 bg-amber-50/50 dark:bg-amber-950/20 p-3.5 space-y-2.5">
+            <label className="flex items-center justify-between gap-3 cursor-pointer">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="w-8 h-8 rounded-xl bg-amber-100 dark:bg-amber-900/60 text-amber-800 dark:text-amber-300 flex items-center justify-center shrink-0">
+                  <Mountain className="w-4 h-4" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs font-bold text-slate-900 dark:text-slate-100">
+                    {lang === 'miz'
+                      ? 'Kailawn / Step Chho-Chhuk A Ngai'
+                      : 'Kailawn / Step Access Needed'}
+                  </p>
+                  <p className="text-[11px] text-slate-600 dark:text-slate-400">
+                    {lang === 'miz'
+                      ? 'Step thui leh awih kalna man dik tak Runner tan'
+                      : 'Fair terrain effort fee added transparently for your Runner'}
+                  </p>
+                </div>
+              </div>
+              <input
+                type="checkbox"
+                checked={kailawnNeeded}
+                onChange={(e) => {
+                  triggerHaptic('light');
+                  const checked = e.target.checked;
+                  setKailawnNeeded(checked);
+                  if (checked && kailawnStepTier === 'none') {
+                    setKailawnStepTier('steps_15_40');
+                  }
+                }}
+                className="w-5 h-5 rounded border-amber-400 text-emerald-700 shrink-0"
+              />
+            </label>
+
+            {kailawnNeeded && (
+              <div className="grid grid-cols-3 gap-2 pt-1">
+                {(
+                  [
+                    ['steps_0_15', '0–15 steps', '+₹15'],
+                    ['steps_15_40', '15–40 steps', '+₹35'],
+                    ['steps_40_plus', '40+ steps', '+₹65'],
+                  ] as const
+                ).map(([tierKey, label, fee]) => {
+                  const active = kailawnStepTier === tierKey;
+                  return (
+                    <button
+                      key={tierKey}
+                      type="button"
+                      onClick={() => {
+                        triggerHaptic('light');
+                        setKailawnStepTier(tierKey);
+                        if (tierKey === 'steps_40_plus') {
+                          setAccessType('long_steps_walk');
+                        }
+                      }}
+                      className={`min-h-[44px] rounded-xl border px-2 py-1.5 text-center transition-all ${
+                        active
+                          ? 'border-emerald-700 bg-emerald-900 text-white shadow-xs'
+                          : 'border-amber-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-200'
+                      }`}
+                    >
+                      <p className="text-[11px] font-bold leading-tight">{label}</p>
+                      <p className={`text-[10px] font-mono tabular-nums ${active ? 'text-emerald-200' : 'text-amber-700 dark:text-amber-400'}`}>
+                        {fee}
+                      </p>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
           <div>
-            <label htmlFor="sheet-errand-title" className="block text-xs font-bold text-slate-700 mb-1.5">
+            <label htmlFor="sheet-errand-title" className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
               {lang === 'miz' ? 'Eng nge tih ngai?' : 'What should we deliver or do?'}
             </label>
             <input
@@ -2118,33 +2815,58 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
                   ? 'Entirnan: Damdawi lam la, Mission Veng step-ah chho rawh'
                   : 'e.g., Pick up medicine & climb 60 steps in Mission Veng'
               }
-              className="w-full min-h-[46px] rounded-2xl border border-slate-300 px-3.5 py-2.5 text-sm text-slate-900 focus:border-emerald-700 focus:outline-none"
+              className="w-full min-h-[46px] rounded-2xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3.5 py-2.5 text-sm text-slate-900 dark:text-slate-100 focus:border-emerald-700 focus:outline-none"
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-2.5">
-            <label className="min-h-[44px] rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 flex items-center justify-center gap-2 cursor-pointer">
-              <Camera className="w-4 h-4 text-emerald-700 shrink-0" />
-              <span className="truncate">
-                {buildingPhotoUrl ? 'Photo Attached' : lang === 'miz' ? 'In Thlalak' : 'Gate Photo'}
-              </span>
-              <input type="file" accept="image/*" onChange={handlePhotoUpload} className="hidden" />
-            </label>
+          {/* 15-Second Mizo Voice Note Booking ("Hmet la Sawi Rawh") + Gate Photo */}
+          <VoiceNoteRecorder
+            lang={lang}
+            value={errandVoiceNote}
+            onChange={(next) => {
+              setErrandVoiceNote(next);
+              if (next?.noteText) {
+                setVoiceNoteTranscript(next.noteText);
+              }
+            }}
+            contextLabelEn="Voice instruction for Runner (no typing needed · 15s)"
+            contextLabelMiz="Type ngai loin Runner hrilh rawh (second 15)"
+          />
 
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <button
               type="button"
-              onClick={toggleVoiceRecording}
-              className={`min-h-[44px] rounded-2xl border px-3 py-2 text-xs font-semibold flex items-center justify-center gap-2 transition-colors ${
-                isRecording
-                  ? 'border-red-500 bg-red-50 text-red-700'
-                  : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
-              }`}
+              onClick={() => setGateCameraOpen(true)}
+              className="min-h-[44px] rounded-2xl bg-emerald-800 px-3.5 py-2 text-xs font-bold text-white hover:bg-emerald-900 flex items-center justify-center gap-2"
             >
-              {isRecording ? <Square className="w-3.5 h-3.5" /> : <Mic className="w-4 h-4 text-emerald-700" />}
-              <span className="truncate">
-                {isRecording ? `${recordedSeconds}s / 15s` : lang === 'miz' ? '15s Aw (Landmark)' : '15s Voice Guide'}
+              <Camera className="w-4 h-4 shrink-0" />
+              <span>
+                {buildingPhotoUrl
+                  ? lang === 'miz'
+                    ? 'Camera-in La Nawn'
+                    : 'Retake with Camera'
+                  : lang === 'miz'
+                    ? 'Live Camera-in La Rawh'
+                    : 'Open Live Camera'}
               </span>
             </button>
+            <label className="min-h-[44px] rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center justify-center gap-2 cursor-pointer">
+              <Camera className="w-4 h-4 text-emerald-700 dark:text-emerald-400 shrink-0" />
+              <span className="truncate">
+                {buildingPhotoUrl
+                  ? 'Gate Photo Attached ✓'
+                  : lang === 'miz'
+                    ? 'Thlalak Upload (Gallery)'
+                    : 'Upload Gate Photo'}
+              </span>
+              <input
+                type="file"
+                accept="image/*"
+                capture="environment"
+                onChange={handlePhotoUpload}
+                className="hidden"
+              />
+            </label>
           </div>
 
           <div className="rounded-2xl border border-slate-200 overflow-hidden">
@@ -2268,11 +2990,37 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
         title={lang === 'miz' ? `${selectedDistrict} Live Map` : `Live in ${selectedDistrict}`}
         subtitle={`${originName} → ${destName} · ${onlinePartnerCount} online · Est. ${estimate?.distanceKm ?? 1.2} km`}
         size="lg"
+        headerAction={
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => {
+                triggerHaptic('light');
+                setPinPickerState({ open: true, mode: 'pickup' });
+              }}
+              className="min-h-[34px] rounded-xl bg-emerald-800 px-2.5 py-1 text-[11px] font-bold text-white hover:bg-emerald-900 inline-flex items-center gap-1"
+            >
+              <MapPin className="w-3 h-3" />
+              <span>Pin A</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                triggerHaptic('light');
+                setPinPickerState({ open: true, mode: 'drop' });
+              }}
+              className="min-h-[34px] rounded-xl bg-slate-900 px-2.5 py-1 text-[11px] font-bold text-white hover:bg-slate-800 inline-flex items-center gap-1"
+            >
+              <MapPin className="w-3 h-3" />
+              <span>Pin B</span>
+            </button>
+          </div>
+        }
         footer={
           <div className="flex items-center justify-between gap-3">
             <div>
               <p className="text-[11px] text-slate-500">All-Inclusive Estimate</p>
-              <p className="text-xl font-extrabold font-mono tabular-nums text-slate-900">
+              <p className="text-xl font-extrabold font-mono tabular-nums text-slate-900 dark:text-white">
                 ₹{estimate?.allInclusiveTotal ?? instantFarePreview}
               </p>
             </div>
@@ -2290,17 +3038,17 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
           </div>
         }
       >
-        <div className="rounded-2xl overflow-hidden border border-slate-200">
+        <div className="rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700">
           {userSettings.lowDataMode && !forceLoadMapInLowData ? (
-            <div className="h-[46dvh] min-h-[260px] bg-slate-50 p-6 flex flex-col items-center justify-center text-center space-y-3">
+            <div className="h-[46dvh] min-h-[260px] bg-slate-50 dark:bg-slate-900 p-6 flex flex-col items-center justify-center text-center space-y-3">
               <div className="w-12 h-12 rounded-2xl bg-emerald-100 text-emerald-800 flex items-center justify-center">
                 <MapIcon className="w-6 h-6" />
               </div>
               <div className="space-y-1 max-w-xs">
-                <p className="text-sm font-bold text-slate-900">
+                <p className="text-sm font-bold text-slate-900 dark:text-slate-100">
                   {lang === 'miz' ? 'Low-Data Mode Hman Mek A Ni' : 'Low-Data Mode Active'}
                 </p>
-                <p className="text-xs text-slate-500">
+                <p className="text-xs text-slate-500 dark:text-slate-400">
                   {originName} → {destName} · {onlinePartnerCount} online partners in {selectedDistrict}
                 </p>
               </div>
@@ -2333,6 +3081,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
                 destination={destPoint}
                 partners={districtPartners}
                 sosTickets={sosTickets}
+                liveUserGps={liveUserGps}
                 heightClass="h-[52dvh] min-h-[280px]"
               />
             </Suspense>
@@ -2596,18 +3345,31 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
           </div>
 
           <div>
-            <div className="flex items-center justify-between mb-1">
+            <div className="flex items-center justify-between gap-2 mb-1">
               <label htmlFor="popup-sos-veng" className="block text-xs font-bold text-slate-700">
                 {lang === 'miz' ? `I Awmna Veng (${selectedDistrict})` : `Your Veng (${selectedDistrict})`}
               </label>
-              <button
-                type="button"
-                onClick={handleCaptureSosGps}
-                className="inline-flex items-center gap-1 text-[11px] font-bold text-red-600 hover:text-red-700"
-              >
-                <Crosshair className="w-3 h-3" />
-                {locatingSosGps ? 'GPS...' : sosLiveGps ? 'GPS Locked' : 'Live GPS'}
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleCaptureSosGps}
+                  className="inline-flex items-center gap-1 text-[11px] font-bold text-red-600 hover:text-red-700"
+                >
+                  <Crosshair className="w-3 h-3" />
+                  {locatingSosGps ? 'Locking...' : sosLiveGps ? 'GPS ✓' : 'Live GPS'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    triggerHaptic('light');
+                    setPinPickerState({ open: true, mode: 'sos' });
+                  }}
+                  className="inline-flex items-center gap-1 text-[11px] font-bold text-slate-700 hover:text-red-700"
+                >
+                  <MapPin className="w-3 h-3" />
+                  <span>Map</span>
+                </button>
+              </div>
             </div>
             <select
               id="popup-sos-veng"
@@ -2814,7 +3576,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
               </label>
             </div>
 
-            <div className="rounded-2xl bg-emerald-50/70 p-3.5 text-xs text-emerald-950 space-y-1">
+            <div className="rounded-2xl bg-emerald-50/70 dark:bg-emerald-950/30 p-3.5 text-xs text-emerald-950 dark:text-emerald-200 space-y-1">
               <p className="font-bold">
                 {selectedProduct.checkBeforePayEligible
                   ? lang === 'miz'
@@ -2822,12 +3584,21 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
                     : 'En Hmasak Phawt · Check-Before-Pay Eligible'
                   : 'Sealed Hygiene Delivery'}
               </p>
-              <p className="text-emerald-900/80">
+              <p className="text-emerald-900/80 dark:text-emerald-300/80">
                 {selectedProduct.checkBeforePayEligible
                   ? `Inspect quality at your doorstep before releasing UPI Escrow. Return fee ₹${remoteConfig.returnDeliveryFee} if rejected (${userMonthlyReturns['cust-1'] ?? 0}/${remoteConfig.monthlyReturnLimit} monthly limit).`
                   : 'Delivered sealed directly from merchant for hygiene safety.'}
               </p>
             </div>
+
+            {/* 15-Second Voice Instruction for Merchant ("Hmet la Sawi Rawh") */}
+            <VoiceNoteRecorder
+              lang={lang}
+              value={mktVoiceNote}
+              onChange={setMktVoiceNote}
+              contextLabelEn="Optional 15s voice note for Shop / Merchant (size, color, gate)"
+              contextLabelMiz="Dawr neitu hrilhna aw (size, rawng, kawt hmun · 15s)"
+            />
           </div>
         )}
       </LayerWindow>
@@ -3050,8 +3821,13 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
               </div>
             </div>
 
+            {/* Clean Unboxed Verified Trust Scorecard */}
+            <p className="text-[11px] font-semibold text-emerald-800 dark:text-emerald-400 border-y border-slate-200/80 dark:border-slate-800 py-2">
+              Police Verified ✓ · YMA/VC Endorsed ✓ · Skill {selectedWorker.practicalSkillScore}/100 ✓ · Zero Hidden Fee ✓
+            </p>
+
             {/* Full Worker Profile & Verification Specs */}
-            <div className="rounded-2xl border border-slate-200/80 p-3.5 space-y-2 text-xs">
+            <div className="rounded-2xl border border-slate-200/80 dark:border-slate-800 p-3.5 space-y-2 text-xs">
               <h4 className="font-bold uppercase tracking-wider text-slate-500">
                 {lang === 'miz' ? 'Chanchin Kimchang & Verification' : 'Full Profile & Rates'}
               </h4>
@@ -3208,6 +3984,26 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
         )}
       </LayerWindow>
 
+      {/* LAYER 1: ZORUN WALLET & REFERRAL REWARDS WINDOW */}
+      <WalletRewardsWindow
+        open={walletLayerOpen}
+        onClose={() => setWalletLayerOpen(false)}
+        lang={lang}
+        wallet={customerWallet}
+        onWalletUpdated={onRefresh}
+      />
+
+      {/* LAYER 1: INTER-DISTRICT SUMO COUNTER PARCEL BRIDGE WINDOW */}
+      <SumoParcelWindow
+        open={sumoLayerOpen}
+        onClose={() => setSumoLayerOpen(false)}
+        lang={lang}
+        selectedDistrict={selectedDistrict}
+        plusPassActive={customerWallet.plusPassActive}
+        parcels={sumoParcels}
+        onBooked={onRefresh}
+      />
+
       {/* LAYER 2: COMPREHENSIVE FULL-DETAIL INSPECTION WINDOWS */}
       <CustomerDetailLayers
         lang={lang}
@@ -3223,6 +4019,42 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
         onTriggerWorkerSos={handleTriggerWorkerSos}
         selectedSosTicket={detailSosTicket}
         onCloseSosTicket={() => setDetailSosId(null)}
+      />
+
+      {/* LAYER 2: GOOGLE MAPS / TERRAIN LOCATION PIN PICKER POPUP MENU */}
+      <MapPinPickerWindow
+        open={pinPickerState.open}
+        onClose={() => setPinPickerState((prev) => ({ ...prev, open: false }))}
+        lang={lang}
+        apiKey={mapsApiKey}
+        initialMode={pinPickerState.mode}
+        district={selectedDistrict}
+        origin={originPoint}
+        destination={destPoint}
+        partners={districtPartners}
+        sosTickets={sosTickets}
+        onConfirmLocation={(mode, resolved) => {
+          applyResolvedLocation(mode, resolved);
+          if (mode !== 'sos' && !bookingSheetOpen) {
+            setBookingSheetOpen(true);
+          }
+        }}
+      />
+
+      {/* LAYER 2: LIVE CAMERA CAPTURE MODAL FOR GATE / BUILDING PHOTO */}
+      <CameraCaptureModal
+        open={gateCameraOpen}
+        onClose={() => setGateCameraOpen(false)}
+        lang={lang}
+        category="proof_photo"
+        district={selectedDistrict}
+        titleEn="Capture Gate / Building Photo"
+        titleMiz="In / Gate Thlalak Camera-in La Rawh"
+        subtitleEn="Helps your Runner spot steep steps & entrance faster"
+        subtitleMiz="Runner-in i gate leh kailawn hmuh zung zung nan"
+        onCaptured={(result) => {
+          setBuildingPhotoUrl(result.url);
+        }}
       />
     </div>
   );

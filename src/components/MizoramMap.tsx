@@ -18,6 +18,8 @@ import {
   type DistrictVengPoint,
 } from '../data/mizoramDistricts';
 
+import type { LiveGpsFix } from '../lib/geolocation';
+
 interface MizoramMapProps {
   apiKey: string;
   district?: MizoramDistrict;
@@ -29,6 +31,10 @@ interface MizoramMapProps {
   partners: PartnerProfile[];
   sosTickets?: EmergencySosTicket[];
   heightClass?: string;
+  interactivePinMode?: 'pickup' | 'drop' | 'sos' | null;
+  selectedPin?: LatLng | null;
+  liveUserGps?: LiveGpsFix | null;
+  onMapPickCoords?: (coords: { lat: number; lng: number }) => void;
   onPlaceSelected?: (place: { label: string; lat: number; lng: number }) => void;
 }
 
@@ -72,23 +78,37 @@ function MapCameraController({
   district,
   districtCenter,
   hasRoute,
+  focusPin,
 }: {
   district: MizoramDistrict;
   districtCenter: LatLng;
   hasRoute: boolean;
+  focusPin?: LatLng | null;
 }) {
   const map = useMap();
   const prevDistrictRef = useRef<MizoramDistrict>(district);
+  const prevFocusRef = useRef<string>('');
 
   useEffect(() => {
     if (!map) return;
+    if (focusPin) {
+      const key = `${focusPin.lat.toFixed(5)},${focusPin.lng.toFixed(5)}`;
+      if (prevFocusRef.current !== key) {
+        prevFocusRef.current = key;
+        map.panTo({ lat: focusPin.lat, lng: focusPin.lng });
+        if ((map.getZoom() || 13) < 15) {
+          map.setZoom(16);
+        }
+        return;
+      }
+    }
     const districtChanged = prevDistrictRef.current !== district;
     prevDistrictRef.current = district;
     if (districtChanged || !hasRoute) {
       map.panTo({ lat: districtCenter.lat, lng: districtCenter.lng });
       map.setZoom(13);
     }
-  }, [map, district, districtCenter.lat, districtCenter.lng, hasRoute]);
+  }, [map, district, districtCenter.lat, districtCenter.lng, hasRoute, focusPin]);
 
   return null;
 }
@@ -215,10 +235,10 @@ function LocalVengSearchInput({
           setResults(matched);
         }}
         placeholder={placeholder}
-        className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-teal-700 focus:outline-none"
+        className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-sm text-slate-900 dark:text-slate-100 focus:border-teal-700 focus:outline-none"
       />
       {results.length > 0 && (
-        <ul className="absolute left-0 right-0 top-full z-30 mt-1 max-h-48 overflow-auto rounded-xl border border-slate-200 bg-white shadow-lg">
+        <ul className="absolute left-0 right-0 top-full z-30 mt-1 max-h-48 overflow-auto rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-lg">
           {results.map((r, i) => (
             <li key={i}>
               <button
@@ -228,7 +248,7 @@ function LocalVengSearchInput({
                   setQuery(r.label);
                   setResults([]);
                 }}
-                className="w-full px-3 py-2 text-left text-xs text-slate-800 hover:bg-slate-50"
+                className="w-full px-3 py-2 text-left text-xs text-slate-800 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800"
               >
                 {r.label}
               </button>
@@ -276,7 +296,12 @@ export function PlacesSearchInput({
         <LocalVengSearchInput district={district} placeholder={placeholder} onSelect={onSelect} />
       }
     >
-      <APIProvider apiKey={cleanKey} libraries={['places']} language="en" region="IN">
+      <APIProvider
+        apiKey={cleanKey}
+        libraries={['places']}
+        language="en"
+        region="IN"
+      >
         <GooglePlacesAutocompleteInner
           district={district}
           placeholder={placeholder}
@@ -381,16 +406,16 @@ function GooglePlacesAutocompleteInner({
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         placeholder={placeholder}
-        className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-teal-700 focus:outline-none"
+        className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-sm text-slate-900 dark:text-slate-100 focus:border-teal-700 focus:outline-none"
       />
       {suggestions.length > 0 && (
-        <ul className="absolute left-0 right-0 top-full z-30 mt-1 max-h-48 overflow-auto rounded-xl border border-slate-200 bg-white shadow-lg">
+        <ul className="absolute left-0 right-0 top-full z-30 mt-1 max-h-48 overflow-auto rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-lg">
           {suggestions.map((s, idx) => (
             <li key={idx}>
               <button
                 type="button"
                 onClick={() => void pickSuggestion(s)}
-                className="w-full px-3 py-2 text-left text-xs text-slate-800 hover:bg-slate-50"
+                className="w-full px-3 py-2 text-left text-xs text-slate-800 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800"
               >
                 {s.placePrediction?.text.text}
               </button>
@@ -410,6 +435,10 @@ function GoogleMapInner({
   destination,
   partners,
   sosTickets = [],
+  interactivePinMode = null,
+  selectedPin = null,
+  liveUserGps = null,
+  onMapPickCoords,
   onFallback,
 }: Omit<MizoramMapProps, 'apiKey' | 'heightClass'> & { onFallback: () => void }) {
   const status = useApiLoadingStatus();
@@ -422,23 +451,79 @@ function GoogleMapInner({
     }
   }, [status, onFallback]);
 
+  const pinPalette =
+    interactivePinMode === 'pickup'
+      ? { bg: '#059669', border: '#065F46', glyph: 'A', label: 'Pickup Pin (Drag or tap map)' }
+      : interactivePinMode === 'sos'
+        ? { bg: '#DC2626', border: '#991B1B', glyph: '!', label: 'SOS Pin (Drag or tap map)' }
+        : { bg: '#0F172A', border: '#020617', glyph: 'B', label: 'Drop Pin (Drag or tap map)' };
+
   return (
     <GoogleMap
       mapId="DEMO_MAP_ID"
-      defaultCenter={origin || center}
-      defaultZoom={13}
+      defaultCenter={selectedPin || origin || center}
+      defaultZoom={selectedPin ? 16 : 13}
       gestureHandling="greedy"
       internalUsageAttributionIds={['gmp_mcp_codeassist_v1_aistudio']}
       style={{ width: '100%', height: '100%' }}
+      onClick={(ev) => {
+        const latLng = ev.detail.latLng;
+        if (interactivePinMode && latLng && onMapPickCoords) {
+          onMapPickCoords({
+            lat: Number(latLng.lat.toFixed(6)),
+            lng: Number(latLng.lng.toFixed(6)),
+          });
+        }
+      }}
     >
       <MapCameraController
         district={district}
         districtCenter={center}
         hasRoute={Boolean(origin && destination)}
+        focusPin={selectedPin || (liveUserGps ? { lat: liveUserGps.lat, lng: liveUserGps.lng } : null)}
       />
       <RoutesPolylineLayer origin={origin} stops={stops} destination={destination} />
 
-      {origin && (
+      {/* Live User GPS Blue Pulsing Dot */}
+      {liveUserGps && (
+        <AdvancedMarker
+          position={{ lat: liveUserGps.lat, lng: liveUserGps.lng }}
+          title={`Live GPS (±${liveUserGps.accuracyMeters}m)`}
+        >
+          <div className="relative flex items-center justify-center">
+            <span className="absolute h-7 w-7 rounded-full bg-sky-500/30 animate-ping" />
+            <span className="h-4 w-4 rounded-full bg-sky-600 border-2 border-white shadow-md" />
+          </div>
+        </AdvancedMarker>
+      )}
+
+      {/* Interactive Draggable Pin when Map Pin Picker Mode is Active */}
+      {interactivePinMode && selectedPin && (
+        <AdvancedMarker
+          position={{ lat: selectedPin.lat, lng: selectedPin.lng }}
+          draggable={Boolean(onMapPickCoords)}
+          title={pinPalette.label}
+          onDragEnd={(e) => {
+            const ll = e.latLng;
+            if (ll && onMapPickCoords) {
+              onMapPickCoords({
+                lat: Number(ll.lat().toFixed(6)),
+                lng: Number(ll.lng().toFixed(6)),
+              });
+            }
+          }}
+        >
+          <Pin
+            background={pinPalette.bg}
+            borderColor={pinPalette.border}
+            glyphColor="#FFFFFF"
+            glyphText={pinPalette.glyph}
+            scale={1.25}
+          />
+        </AdvancedMarker>
+      )}
+
+      {origin && interactivePinMode !== 'pickup' && (
         <AdvancedMarker position={origin} title={origin.label || 'Pickup'}>
           <Pin background="#0F766E" borderColor="#115E59" glyphColor="#FFFFFF" glyphText="A" />
         </AdvancedMarker>
@@ -448,7 +533,7 @@ function GoogleMapInner({
           <Pin background="#D97706" borderColor="#B45309" glyphColor="#FFFFFF" glyphText={String(idx + 1)} />
         </AdvancedMarker>
       ))}
-      {destination && (
+      {destination && interactivePinMode !== 'drop' && (
         <AdvancedMarker position={destination} title={destination.label || 'Drop'}>
           <Pin background="#0F172A" borderColor="#020617" glyphColor="#FFFFFF" glyphText="B" />
         </AdvancedMarker>
@@ -506,8 +591,13 @@ function DistrictTerrainVectorMap({
   destination,
   partners,
   sosTickets = [],
+  interactivePinMode = null,
+  selectedPin = null,
+  liveUserGps = null,
+  onMapPickCoords,
 }: Omit<MizoramMapProps, 'apiKey' | 'heightClass'>) {
   const [hoveredInfo, setHoveredInfo] = useState<string | null>(null);
+  const svgRef = useRef<SVGSVGElement | null>(null);
   const districtInfo = getDistrictInfo(district);
   const activeVengs = districtVengs && districtVengs.length > 0 ? districtVengs : districtInfo.vengs;
 
@@ -528,9 +618,20 @@ function DistrictTerrainVectorMap({
     ? MIZORAM_DISTRICTS.map((d) => ({ name: d.district, lat: d.center.lat, lng: d.center.lng }))
     : activeVengs;
 
+  const extraPins: LatLng[] = [];
+  if (selectedPin) extraPins.push(selectedPin);
+  if (
+    liveUserGps &&
+    Math.abs(liveUserGps.lat - districtInfo.center.lat) < 0.35 &&
+    Math.abs(liveUserGps.lng - districtInfo.center.lng) < 0.35
+  ) {
+    extraPins.push({ lat: liveUserGps.lat, lng: liveUserGps.lng });
+  }
+
   const allPoints: LatLng[] = [
     ...referenceNodes,
     ...waypoints,
+    ...extraPins,
     ...visiblePartners.map((p) => ({ lat: p.lat, lng: p.lng })),
     ...visibleSos.map((t) => ({ lat: t.lat, lng: t.lng })),
   ];
@@ -556,19 +657,70 @@ function DistrictTerrainVectorMap({
     };
   };
 
+  const unprojectClientCoords = (clientX: number, clientY: number): { lat: number; lng: number } | null => {
+    const svg = svgRef.current;
+    if (!svg) return null;
+    let svgX = 380;
+    let svgY = 170;
+    const ctm = svg.getScreenCTM();
+    if (ctm) {
+      const pt = svg.createSVGPoint();
+      pt.x = clientX;
+      pt.y = clientY;
+      const local = pt.matrixTransform(ctm.inverse());
+      svgX = local.x;
+      svgY = local.y;
+    } else {
+      const rect = svg.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return null;
+      svgX = ((clientX - rect.left) / rect.width) * 760;
+      svgY = ((clientY - rect.top) / rect.height) * 340;
+    }
+    const clampedX = Math.max(40, Math.min(720, svgX));
+    const clampedY = Math.max(30, Math.min(310, svgY));
+    const lng = minLng + ((clampedX - 40) / 680) * (maxLng - minLng || 0.02);
+    const lat = minLat + (1 - (clampedY - 30) / 280) * (maxLat - minLat || 0.02);
+    return {
+      lat: Number(lat.toFixed(6)),
+      lng: Number(lng.toFixed(6)),
+    };
+  };
+
   const pathPoints = waypoints.map(project);
   const pathD =
     pathPoints.length > 1
       ? pathPoints.map((pt, i) => `${i === 0 ? 'M' : 'L'} ${pt.x.toFixed(1)} ${pt.y.toFixed(1)}`).join(' ')
       : '';
 
+  const liveGpsPos = liveUserGps
+    ? project({ lat: liveUserGps.lat, lng: liveUserGps.lng })
+    : null;
+  const activePinPos = interactivePinMode && selectedPin ? project(selectedPin) : null;
+  const activePinColor =
+    interactivePinMode === 'pickup'
+      ? '#059669'
+      : interactivePinMode === 'sos'
+        ? '#DC2626'
+        : '#0F172A';
+  const activePinGlyph =
+    interactivePinMode === 'pickup' ? 'A' : interactivePinMode === 'sos' ? '!' : 'B';
+
   return (
-    <div className="relative h-full w-full overflow-hidden rounded-xl border border-slate-200 bg-slate-100">
+    <div className="relative h-full w-full overflow-hidden rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-100">
       <svg
+        ref={svgRef}
         viewBox="0 0 760 340"
-        className="h-full w-full"
+        className={`h-full w-full ${interactivePinMode && onMapPickCoords ? 'cursor-crosshair' : ''}`}
         role="img"
         aria-label={`${district} Hill Terrain Live Operations Map`}
+        onClick={(e) => {
+          if (!interactivePinMode || !onMapPickCoords) return;
+          const picked = unprojectClientCoords(e.clientX, e.clientY);
+          if (picked) {
+            onMapPickCoords(picked);
+            setHoveredInfo(`Pinned: ${picked.lat.toFixed(5)}, ${picked.lng.toFixed(5)}`);
+          }
+        }}
       >
         <defs>
           <linearGradient id="hillShade" x1="0" y1="0" x2="1" y2="1">
@@ -605,11 +757,19 @@ function DistrictTerrainVectorMap({
               key={v.name}
               transform={`translate(${p.x}, ${p.y})`}
               className="cursor-pointer"
-              onClick={() => setHoveredInfo(infoText)}
+              onClick={(e) => {
+                if (interactivePinMode && onMapPickCoords) {
+                  e.stopPropagation();
+                  onMapPickCoords({ lat: v.lat, lng: v.lng });
+                  setHoveredInfo(`Pinned to ${v.name}`);
+                } else {
+                  setHoveredInfo(infoText);
+                }
+              }}
             >
-              <circle r={showLabel ? '3.5' : '2.2'} fill={showLabel ? '#475569' : '#94A3B8'} />
+              <circle r={showLabel ? '4' : '2.4'} fill={showLabel ? '#475569' : '#94A3B8'} />
               {showLabel && (
-                <text x="6" y="3" fontSize="10" fill="#475569" fontWeight="500">
+                <text x="6" y="3" fontSize="10" fill="#334155" fontWeight="600">
                   {v.name}
                 </text>
               )}
@@ -632,6 +792,25 @@ function DistrictTerrainVectorMap({
             </g>
           );
         })}
+
+        {/* Live User GPS Blue Pulse Dot */}
+        {liveGpsPos && (
+          <g transform={`translate(${liveGpsPos.x}, ${liveGpsPos.y})`}>
+            <circle r="18" fill="#0284C7" fillOpacity="0.18" />
+            <circle r="6" fill="#0284C7" stroke="#FFFFFF" strokeWidth="2.5" />
+          </g>
+        )}
+
+        {/* Active Interactive Selected Pin */}
+        {activePinPos && (
+          <g transform={`translate(${activePinPos.x}, ${activePinPos.y})`}>
+            <circle r="20" fill={activePinColor} fillOpacity="0.16" />
+            <circle r="13" fill={activePinColor} stroke="#FFFFFF" strokeWidth="2.5" />
+            <text textAnchor="middle" dy="4" fontSize="11" fill="#FFFFFF" fontWeight="800">
+              {activePinGlyph}
+            </text>
+          </g>
+        )}
 
         {/* Live Partners */}
         {visiblePartners.map((partner) => {
@@ -686,6 +865,16 @@ function DistrictTerrainVectorMap({
         })}
       </svg>
 
+      {interactivePinMode && (
+        <div className="pointer-events-none absolute top-2.5 left-2.5 rounded-lg bg-slate-900/85 px-2.5 py-1 text-[11px] font-semibold text-white backdrop-blur-xs">
+          {interactivePinMode === 'pickup'
+            ? 'Tap map or any Veng to set Pickup Pin (A)'
+            : interactivePinMode === 'sos'
+              ? 'Tap map or Veng to set SOS Pin (!)'
+              : 'Tap map or any Veng to set Drop Pin (B)'}
+        </div>
+      )}
+
       <div className="absolute bottom-2.5 left-2.5 right-2.5 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-white/90 px-3 py-1.5 text-[11px] text-slate-700 backdrop-blur-sm border border-slate-200">
         <span>
           {hoveredInfo ||
@@ -710,6 +899,10 @@ export const MizoramMap: React.FC<MizoramMapProps> = ({
   partners,
   sosTickets,
   heightClass = 'h-72 lg:h-80',
+  interactivePinMode = null,
+  selectedPin = null,
+  liveUserGps = null,
+  onMapPickCoords,
 }) => {
   const cleanKey = (apiKey || '').trim();
   const [useFallback, setUseFallback] = useState(!isValidGoogleMapsKey(cleanKey));
@@ -733,6 +926,10 @@ export const MizoramMap: React.FC<MizoramMapProps> = ({
       destination={destination}
       partners={partners}
       sosTickets={sosTickets}
+      interactivePinMode={interactivePinMode}
+      selectedPin={selectedPin}
+      liveUserGps={liveUserGps}
+      onMapPickCoords={onMapPickCoords}
     />
   );
 
@@ -740,7 +937,12 @@ export const MizoramMap: React.FC<MizoramMapProps> = ({
     <div className={`w-full ${heightClass} rounded-xl overflow-hidden`} data-testid="mizoram-map-container">
       {!useFallback && isValidGoogleMapsKey(cleanKey) ? (
         <MapsErrorBoundary fallback={fallbackElement}>
-          <APIProvider apiKey={cleanKey} libraries={['places', 'routes', 'marker']} language="en" region="IN">
+          <APIProvider
+            apiKey={cleanKey}
+            libraries={['places', 'routes', 'marker']}
+            language="en"
+            region="IN"
+          >
             <GoogleMapInner
               district={district}
               districtCenter={districtCenter}
@@ -749,6 +951,10 @@ export const MizoramMap: React.FC<MizoramMapProps> = ({
               destination={destination}
               partners={partners}
               sosTickets={sosTickets}
+              interactivePinMode={interactivePinMode}
+              selectedPin={selectedPin}
+              liveUserGps={liveUserGps}
+              onMapPickCoords={onMapPickCoords}
               onFallback={() => setUseFallback(true)}
             />
           </APIProvider>

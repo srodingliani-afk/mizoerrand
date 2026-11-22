@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { z } from 'zod';
 import { db } from '../infrastructure/store';
 import { realtimeHub } from '../infrastructure/realtimeHub';
 import { requireAdminAuth } from '../infrastructure/adminAuth';
@@ -21,39 +22,106 @@ const RATE_CARDS: Record<EmergencyCategory, { rate: number; slaMinutes: number }
   women_night_escort: { rate: 350, slaMinutes: 15 },
 };
 
+const MIZORAM_DISTRICTS_ENUM = [
+  'Aizawl',
+  'Lunglei',
+  'Champhai',
+  'Serchhip',
+  'Kolasib',
+  'Lawngtlai',
+  'Mamit',
+  'Siaha',
+  'Saitual',
+  'Khawzawl',
+  'Hnahthial',
+] as const;
+
+const dispatchSosSchema = z.object({
+  customerName: z.string().trim().min(1).max(80).optional().default('Pu Vanlalrema'),
+  district: z.enum(MIZORAM_DISTRICTS_ENUM).optional().default('Aizawl'),
+  veng: z.string().trim().min(1).max(80).optional().default('Dawrpui'),
+  lat: z.number().finite().min(21.0).max(25.5).optional().default(23.7271),
+  lng: z.number().finite().min(91.5).max(94.0).optional().default(92.7176),
+  category: z.enum([
+    'plumber_water',
+    'electrician_power',
+    'roadside_mechanic_towing',
+    'locksmith',
+    'medical_urgent_cab',
+    'ambulance_oxygen',
+    'night_pharmacy_run',
+    'lpg_gas_leak',
+    'landslide_drain_clear',
+    'water_tanker_urgent',
+    'tyre_puncture_fuel',
+    'women_night_escort',
+  ]),
+  voiceNoteTranscript: z
+    .string()
+    .trim()
+    .max(240)
+    .optional()
+    .default('Urgent assistance needed at main gate.'),
+});
+
+const techUpdateSchema = z.object({
+  status: z.enum(['en_route', 'resolved']),
+  sparePartsAmount: z.number().finite().min(0).max(50000).optional(),
+  sparePartReceiptUrl: z.string().trim().max(240).optional(),
+  techName: z.string().trim().min(1).max(60).optional(),
+});
+
+// Sliding-window SOS dispatch rate limiter (max 5 SOS dispatches per 5 minutes per client)
+const SOS_WINDOW_MS = 5 * 60 * 1000;
+const SOS_MAX_PER_WINDOW = 5;
+const sosDispatchHistory = new Map<string, number[]>();
+
+function checkSosRateLimit(clientKey: string): { allowed: boolean; retryAfterSeconds: number } {
+  const now = Date.now();
+  const timestamps = (sosDispatchHistory.get(clientKey) || []).filter(
+    (ts) => now - ts < SOS_WINDOW_MS
+  );
+  if (timestamps.length >= SOS_MAX_PER_WINDOW) {
+    const oldest = timestamps[0];
+    const retryAfterSeconds = Math.max(1, Math.ceil((SOS_WINDOW_MS - (now - oldest)) / 1000));
+    sosDispatchHistory.set(clientKey, timestamps);
+    return { allowed: false, retryAfterSeconds };
+  }
+  timestamps.push(now);
+  sosDispatchHistory.set(clientKey, timestamps);
+  return { allowed: true, retryAfterSeconds: 0 };
+}
+
 emergency24x7Router.get('/tickets', (_req, res) => {
   const state = db.get();
   res.json({ tickets: state.sosTickets, rateCards: RATE_CARDS });
 });
 
 emergency24x7Router.post('/dispatch', (req, res) => {
-  const {
-    customerName = 'Pu Vanlalrema',
-    district = 'Aizawl',
-    veng = 'Dawrpui',
-    lat = 23.7271,
-    lng = 92.7176,
-    category,
-    voiceNoteTranscript = 'Urgent assistance needed at main gate.',
-  } = req.body as {
-    customerName?: string;
-    district?: MizoramDistrict;
-    veng?: string;
-    lat?: number;
-    lng?: number;
-    category: EmergencyCategory;
-    voiceNoteTranscript?: string;
-  };
-
-  if (!category || !RATE_CARDS[category]) {
-    res.status(400).json({ error: 'Valid emergency category is required' });
+  const clientKey = (req.ip || req.socket.remoteAddress || 'unknown').trim();
+  const limit = checkSosRateLimit(clientKey);
+  if (!limit.allowed) {
+    res.setHeader('Retry-After', String(limit.retryAfterSeconds));
+    res.status(429).json({
+      error: `Too many SOS dispatches in 5 minutes. Please wait ${limit.retryAfterSeconds}s or call 112/108 immediately.`,
+      retryAfterSeconds: limit.retryAfterSeconds,
+    });
     return;
   }
 
+  const parsed = dispatchSosSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({
+      error: parsed.error.issues[0]?.message || 'Valid emergency category and location are required',
+    });
+    return;
+  }
+
+  const { customerName, district, veng, lat, lng, category, voiceNoteTranscript } = parsed.data;
   const state = db.get();
   const salariedTech =
-    state.partners.find((p) => p.district === district && p.isSalariedTechnician && p.online) ||
-    state.partners.find((p) => p.district === district && p.online) ||
+    state.partners.find((p) => p.district === (district as MizoramDistrict) && p.isSalariedTechnician && p.online) ||
+    state.partners.find((p) => p.district === (district as MizoramDistrict) && p.online) ||
     state.partners.find((p) => p.isSalariedTechnician && p.online) ||
     state.partners[0];
   const card = RATE_CARDS[category];
@@ -105,18 +173,15 @@ emergency24x7Router.post('/tickets/:id/update', requireAdminAuth, (req, res) => 
 });
 
 emergency24x7Router.post('/tickets/:id/tech-update', (req, res) => {
-  const { status, sparePartsAmount, sparePartReceiptUrl, techName } = req.body as {
-    status?: 'en_route' | 'resolved';
-    sparePartsAmount?: number;
-    sparePartReceiptUrl?: string;
-    techName?: string;
-  };
-
-  if (status !== 'en_route' && status !== 'resolved') {
-    res.status(400).json({ error: 'Valid technician status (en_route or resolved) is required.' });
+  const parsed = techUpdateSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({
+      error: parsed.error.issues[0]?.message || 'Valid technician status (en_route or resolved) is required.',
+    });
     return;
   }
 
+  const { status, sparePartsAmount, sparePartReceiptUrl, techName } = parsed.data;
   const state = db.get();
   const ticket = state.sosTickets.find((t) => t.id === req.params.id);
   if (!ticket) {
@@ -125,14 +190,14 @@ emergency24x7Router.post('/tickets/:id/tech-update', (req, res) => {
   }
 
   ticket.status = status;
-  if (typeof sparePartsAmount === 'number' && Number.isFinite(sparePartsAmount)) {
-    ticket.sparePartsAmount = Math.max(0, Math.min(50000, Math.round(sparePartsAmount)));
+  if (typeof sparePartsAmount === 'number') {
+    ticket.sparePartsAmount = Math.round(sparePartsAmount);
   }
-  if (typeof sparePartReceiptUrl === 'string' && sparePartReceiptUrl.trim()) {
-    ticket.sparePartReceiptUrl = sparePartReceiptUrl.trim().slice(0, 120);
+  if (sparePartReceiptUrl) {
+    ticket.sparePartReceiptUrl = sparePartReceiptUrl;
   }
-  if (typeof techName === 'string' && techName.trim()) {
-    ticket.assignedTechName = techName.trim().slice(0, 60);
+  if (techName) {
+    ticket.assignedTechName = techName;
   }
 
   db.addAudit(
@@ -143,4 +208,3 @@ emergency24x7Router.post('/tickets/:id/tech-update', (req, res) => {
   realtimeHub.broadcast('sos_alert', { ticket });
   res.json({ ticket });
 });
-

@@ -9,6 +9,9 @@ import {
   triggerHaptic,
 } from '../lib/nativeBridge';
 import { compressImageToWebP } from '../lib/offlineCache';
+import { dataUrlToBlob, uploadMediaFile } from '../lib/mediaUpload';
+import { publishRunnerLocationToFirestore } from '../lib/firestoreSync';
+import { CameraCaptureModal } from './CameraCaptureModal';
 
 interface PartnerViewProps {
   lang: Language;
@@ -33,6 +36,10 @@ export const PartnerView: React.FC<PartnerViewProps> = ({
   const [otpDrafts, setOtpDrafts] = useState<Record<string, string>>({});
   const [feedback, setFeedback] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null);
   const [sirenBanner, setSirenBanner] = useState(false);
+  const [proofCameraTarget, setProofCameraTarget] = useState<{
+    jobId: string;
+    stage: 'before' | 'after';
+  } | null>(null);
 
   const scopedPartners =
     districtFilter === 'All'
@@ -99,28 +106,54 @@ export const PartnerView: React.FC<PartnerViewProps> = ({
   const handleBackgroundGpsPing = async () => {
     if (!activePartner) return;
     triggerHaptic('sync');
+
+    const sendHeartbeat = async (lat: number, lng: number, accuracy?: number) => {
+      try {
+        const res = await fetch(`/api/errands/partners/${activePartner.id}/heartbeat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ lat, lng, online: true }),
+        });
+        if (!res.ok) {
+          triggerHaptic('error');
+          setFeedback({ type: 'err', msg: 'Could not sync background GPS.' });
+          return;
+        }
+        void publishRunnerLocationToFirestore({
+          partner: activePartner,
+          lat,
+          lng,
+          accuracyMeters: accuracy,
+        });
+        setFeedback({
+          type: 'ok',
+          msg: `Live GPS synced (${lat.toFixed(5)}, ${lng.toFixed(5)}${accuracy ? ` · ±${Math.round(accuracy)}m` : ''}).`,
+        });
+        await onRefresh();
+      } catch {
+        triggerHaptic('error');
+        setFeedback({ type: 'err', msg: 'Network error syncing background GPS.' });
+      }
+    };
+
+    if (typeof navigator !== 'undefined' && navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          void sendHeartbeat(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy);
+        },
+        () => {
+          const jitterLat = activePartner.lat + (Math.random() - 0.5) * 0.0012;
+          const jitterLng = activePartner.lng + (Math.random() - 0.5) * 0.0012;
+          void sendHeartbeat(jitterLat, jitterLng);
+        },
+        { enableHighAccuracy: true, maximumAge: 0, timeout: 6000 }
+      );
+      return;
+    }
+
     const jitterLat = activePartner.lat + (Math.random() - 0.5) * 0.0012;
     const jitterLng = activePartner.lng + (Math.random() - 0.5) * 0.0012;
-    try {
-      const res = await fetch(`/api/errands/partners/${activePartner.id}/heartbeat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lat: jitterLat, lng: jitterLng, online: true }),
-      });
-      if (!res.ok) {
-        triggerHaptic('error');
-        setFeedback({ type: 'err', msg: 'Could not sync background GPS.' });
-        return;
-      }
-      setFeedback({
-        type: 'ok',
-        msg: `Background GPS synced to Upstash Redis (${jitterLat.toFixed(4)}, ${jitterLng.toFixed(4)}).`,
-      });
-      await onRefresh();
-    } catch {
-      triggerHaptic('error');
-      setFeedback({ type: 'err', msg: 'Network error syncing background GPS.' });
-    }
+    await sendHeartbeat(jitterLat, jitterLng);
   };
 
   const handleSubmitBid = async (jobId: string, fallbackAmt: number) => {
@@ -149,6 +182,24 @@ export const PartnerView: React.FC<PartnerViewProps> = ({
     }
   };
 
+  const saveProofUrl = async (jobId: string, stage: 'before' | 'after', proofUrl?: string) => {
+    const res = await fetch(`/api/errands/jobs/${jobId}/proof`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stage, proofUrl }),
+    });
+    if (!res.ok) {
+      triggerHaptic('error');
+      const data = await res.json().catch(() => ({}));
+      setFeedback({ type: 'err', msg: data.error || 'Could not upload proof photo.' });
+      return;
+    }
+    triggerHaptic('success');
+    setFeedback({ type: 'ok', msg: `Mandatory ${stage.toUpperCase()} proof saved.` });
+    if (activePartner) await loadStrictJobs(activePartner.id);
+    await onRefresh();
+  };
+
   const handleUploadProof = async (
     jobId: string,
     stage: 'before' | 'after',
@@ -158,23 +209,18 @@ export const PartnerView: React.FC<PartnerViewProps> = ({
     try {
       let proofUrl: string | undefined;
       if (file) {
-        proofUrl = await compressImageToWebP(file, 800);
+        const webpDataUrl = await compressImageToWebP(file, 800);
+        const blob = await dataUrlToBlob(webpDataUrl);
+        const uploaded = await uploadMediaFile({
+          file: blob,
+          filename: `proof-${jobId}-${stage}.webp`,
+          category: 'proof_photo',
+          district: activePartner?.district || selectedDistrict,
+          orderRef: jobId,
+        });
+        proofUrl = uploaded.url || webpDataUrl;
       }
-      const res = await fetch(`/api/errands/jobs/${jobId}/proof`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ stage, proofUrl }),
-      });
-      if (!res.ok) {
-        triggerHaptic('error');
-        const data = await res.json().catch(() => ({}));
-        setFeedback({ type: 'err', msg: data.error || 'Could not upload proof photo.' });
-        return;
-      }
-      triggerHaptic('success');
-      setFeedback({ type: 'ok', msg: `Mandatory ${stage.toUpperCase()} proof saved.` });
-      if (activePartner) await loadStrictJobs(activePartner.id);
-      await onRefresh();
+      await saveProofUrl(jobId, stage, proofUrl);
     } catch {
       triggerHaptic('error');
       setFeedback({ type: 'err', msg: 'Network error saving proof photo.' });
@@ -458,43 +504,43 @@ export const PartnerView: React.FC<PartnerViewProps> = ({
                   <div className="flex flex-wrap items-center gap-3">
                     <label className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-xs font-medium text-slate-800 hover:bg-slate-50 cursor-pointer">
                       <Camera className="w-3.5 h-3.5 text-teal-700" />
-                      {job.beforeProofUrl ? 'Before Proof Saved' : 'Upload Before Photo/Video'}
+                      {job.beforeProofUrl ? 'Before Proof Saved' : 'Upload Before File'}
                       <input
                         type="file"
                         accept="image/*"
+                        capture="environment"
                         className="hidden"
                         onChange={(e) => handleUploadProof(job.id, 'before', e.target.files?.[0])}
                       />
                     </label>
-                    {!job.beforeProofUrl && (
-                      <button
-                        type="button"
-                        onClick={() => handleUploadProof(job.id, 'before')}
-                        className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                      >
-                        Capture Before Proof
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      onClick={() => setProofCameraTarget({ jobId: job.id, stage: 'before' })}
+                      className="rounded-lg border border-teal-700 bg-teal-50 px-3 py-2 text-xs font-semibold text-teal-900 hover:bg-teal-100 inline-flex items-center gap-1.5"
+                    >
+                      <Camera className="w-3.5 h-3.5" />
+                      {job.beforeProofUrl ? 'Retake Before (Camera)' : 'Camera: Before Proof'}
+                    </button>
 
                     <label className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-xs font-medium text-slate-800 hover:bg-slate-50 cursor-pointer">
                       <Camera className="w-3.5 h-3.5 text-teal-700" />
-                      {job.afterProofUrl ? 'After Proof Saved' : 'Upload After Photo/Video'}
+                      {job.afterProofUrl ? 'After Proof Saved' : 'Upload After File'}
                       <input
                         type="file"
                         accept="image/*"
+                        capture="environment"
                         className="hidden"
                         onChange={(e) => handleUploadProof(job.id, 'after', e.target.files?.[0])}
                       />
                     </label>
-                    {!job.afterProofUrl && (
-                      <button
-                        type="button"
-                        onClick={() => handleUploadProof(job.id, 'after')}
-                        className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                      >
-                        Capture After Proof
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      onClick={() => setProofCameraTarget({ jobId: job.id, stage: 'after' })}
+                      className="rounded-lg border border-teal-700 bg-teal-50 px-3 py-2 text-xs font-semibold text-teal-900 hover:bg-teal-100 inline-flex items-center gap-1.5"
+                    >
+                      <Camera className="w-3.5 h-3.5" />
+                      {job.afterProofUrl ? 'Retake After (Camera)' : 'Camera: After Proof'}
+                    </button>
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2">
@@ -519,6 +565,29 @@ export const PartnerView: React.FC<PartnerViewProps> = ({
           ))
         )}
       </div>
+
+      <CameraCaptureModal
+        open={Boolean(proofCameraTarget)}
+        onClose={() => setProofCameraTarget(null)}
+        lang={lang}
+        category="proof_photo"
+        district={activePartner?.district || selectedDistrict}
+        orderRef={proofCameraTarget?.jobId}
+        titleEn={
+          proofCameraTarget?.stage === 'before'
+            ? 'Capture Pickup Proof (Camera)'
+            : 'Capture Handover Proof (Camera)'
+        }
+        titleMiz={
+          proofCameraTarget?.stage === 'before'
+            ? 'Lakna Hmun Proof Thla La Rawh'
+            : 'Pek Fel Proof Thla La Rawh'
+        }
+        onCaptured={async (result) => {
+          if (!proofCameraTarget) return;
+          await saveProofUrl(proofCameraTarget.jobId, proofCameraTarget.stage, result.url);
+        }}
+      />
     </div>
   );
 };

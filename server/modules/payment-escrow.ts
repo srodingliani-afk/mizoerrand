@@ -1,14 +1,28 @@
 import { Router } from 'express';
+import { z } from 'zod';
 import { db } from '../infrastructure/store';
 import { realtimeHub } from '../infrastructure/realtimeHub';
 import { requireAdminAuth } from '../infrastructure/adminAuth';
+import { verifyLedgerIntegrity } from '../infrastructure/ledgerService';
 
 export const paymentEscrowRouter = Router();
+
+const withdrawSchema = z.object({
+  amount: z.number().finite().positive().max(200000).optional(),
+});
+
+const resolveDisputeSchema = z.object({
+  resolution: z.enum(['resolved_refund', 'resolved_payout', 'blacklisted']),
+  blacklistCustomer: z.boolean().optional(),
+});
 
 paymentEscrowRouter.get('/ledger', requireAdminAuth, (_req, res) => {
   const state = db.get();
   res.json({
     ledger: state.escrowLedger,
+    doubleEntryJournals: state.doubleEntryJournals,
+    accountBalances: state.accountBalances,
+    ledgerIntegrity: verifyLedgerIntegrity(state),
     disputes: state.disputes,
     blacklistedCustomers: state.blacklistedCustomers,
     prankStrikeCounts: state.prankStrikeCounts,
@@ -30,14 +44,18 @@ paymentEscrowRouter.post('/partners/:id/deposit-cod', (req, res) => {
 });
 
 paymentEscrowRouter.post('/partners/:id/withdraw', (req, res) => {
-  const { amount } = req.body as { amount?: number };
+  const parsed = withdrawSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid withdrawal amount' });
+    return;
+  }
   const state = db.get();
   const partner = state.partners.find((p) => p.id === req.params.id);
   if (!partner) {
     res.status(404).json({ error: 'Partner not found' });
     return;
   }
-  const withdrawAmt = Math.min(partner.walletBalance, Math.max(100, Number(amount) || partner.walletBalance));
+  const withdrawAmt = Math.min(partner.walletBalance, Math.max(100, Number(parsed.data.amount) || partner.walletBalance));
   if (withdrawAmt <= 0 || partner.walletBalance < withdrawAmt) {
     res.status(400).json({ error: 'Insufficient wallet balance' });
     return;
@@ -65,10 +83,12 @@ paymentEscrowRouter.post('/webhooks/razorpay-reconcile', requireAdminAuth, (req,
 });
 
 paymentEscrowRouter.post('/disputes/:id/resolve', requireAdminAuth, (req, res) => {
-  const { resolution, blacklistCustomer } = req.body as {
-    resolution: 'resolved_refund' | 'resolved_payout' | 'blacklisted';
-    blacklistCustomer?: boolean;
-  };
+  const parsed = resolveDisputeSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid dispute resolution' });
+    return;
+  }
+  const { resolution, blacklistCustomer } = parsed.data;
   const state = db.get();
   const dispute = state.disputes.find((d) => d.id === req.params.id);
   if (!dispute) {

@@ -1,0 +1,371 @@
+{
+  "entities": {
+    "UserPublicProfile": {
+      "title": "UserPublicProfile",
+      "description": "Public, non-PII user identity and RBAC role assignment stored under /users/{uid}/public/profile.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID matching document path uid",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Display name shown on errands and dispatches",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "role": {
+          "type": "string",
+          "enum": ["CUSTOMER", "RUNNER", "STAFF", "MERCHANT", "TECHNICIAN", "SUPER_ADMIN"],
+          "description": "Verified RBAC role assigned to the account"
+        },
+        "preferredWorkspace": {
+          "type": "string",
+          "enum": ["customer", "partner", "staff", "merchant", "technician"],
+          "description": "Active portal workspace preference"
+        },
+        "district": {
+          "type": "string",
+          "enum": [
+            "Aizawl",
+            "Lunglei",
+            "Champhai",
+            "Serchhip",
+            "Kolasib",
+            "Lawngtlai",
+            "Mamit",
+            "Siaha",
+            "Saitual",
+            "Khawzawl",
+            "Hnahthial"
+          ]
+        },
+        "photoUrl": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "displayName", "role", "district", "createdAt", "updatedAt"]
+    },
+    "UserPrivateInfo": {
+      "title": "UserPrivateInfo",
+      "description": "Owner-only PII record isolated under /users/{uid}/private/info.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 160
+        },
+        "phone": {
+          "type": "string",
+          "maxLength": 24
+        },
+        "defaultVeng": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "createdAt", "updatedAt"]
+    },
+    "AdminRegistryEntry": {
+      "title": "AdminRegistryEntry",
+      "description": "Explicit RBAC super-admin membership marker under /admins/{uid}.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "role": {
+          "type": "string",
+          "enum": ["SUPER_ADMIN"]
+        },
+        "grantedBy": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "role", "createdAt"]
+    },
+    "DistrictRunnerLocation": {
+      "title": "DistrictRunnerLocation",
+      "description": "Real-time district-scoped GPS runner telemetry stored under /districts/{district}/runners/{partnerId}.",
+      "type": "object",
+      "properties": {
+        "partnerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "district": {
+          "type": "string",
+          "enum": [
+            "Aizawl",
+            "Lunglei",
+            "Champhai",
+            "Serchhip",
+            "Kolasib",
+            "Lawngtlai",
+            "Mamit",
+            "Siaha",
+            "Saitual",
+            "Khawzawl",
+            "Hnahthial"
+          ]
+        },
+        "veng": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "category": {
+          "type": "string",
+          "enum": ["walker", "bike", "auto_taxi", "pickup_truck"]
+        },
+        "online": {
+          "type": "boolean"
+        },
+        "lat": {
+          "type": "number"
+        },
+        "lng": {
+          "type": "number"
+        },
+        "accuracyMeters": {
+          "type": "number"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["partnerId", "ownerUid", "name", "district", "veng", "category", "online", "lat", "lng", "updatedAt"]
+    },
+    "DistrictLiveOrder": {
+      "title": "DistrictLiveOrder",
+      "description": "Real-time district-scoped live errand/order status under /districts/{district}/orders/{orderId}.",
+      "type": "object",
+      "properties": {
+        "orderId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "customerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "assignedRunnerUid": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "district": {
+          "type": "string",
+          "enum": [
+            "Aizawl",
+            "Lunglei",
+            "Champhai",
+            "Serchhip",
+            "Kolasib",
+            "Lawngtlai",
+            "Mamit",
+            "Siaha",
+            "Saitual",
+            "Khawzawl",
+            "Hnahthial"
+          ]
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "jobType": {
+          "type": "string",
+          "enum": [
+            "hyperlocal_errand",
+            "step_delivery",
+            "queue_standing",
+            "truck_helper",
+            "bike_express",
+            "auto_cab_ride",
+            "heavy_cargo_shift"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": ["bidding", "assigned", "in_progress", "completed", "cancelled"]
+        },
+        "allInclusiveTotal": {
+          "type": "number"
+        },
+        "kailawnSurchargeRs": {
+          "type": "number"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["orderId", "customerUid", "district", "title", "jobType", "status", "allInclusiveTotal", "createdAt", "updatedAt"]
+    },
+    "DistrictSosAlert": {
+      "title": "DistrictSosAlert",
+      "description": "Real-time 24x7 district-scoped emergency dispatch under /districts/{district}/sos/{ticketId}.",
+      "type": "object",
+      "properties": {
+        "ticketId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "customerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "assignedTechUid": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "district": {
+          "type": "string",
+          "enum": [
+            "Aizawl",
+            "Lunglei",
+            "Champhai",
+            "Serchhip",
+            "Kolasib",
+            "Lawngtlai",
+            "Mamit",
+            "Siaha",
+            "Saitual",
+            "Khawzawl",
+            "Hnahthial"
+          ]
+        },
+        "veng": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "category": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "lat": {
+          "type": "number"
+        },
+        "lng": {
+          "type": "number"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["flashing_dispatch", "en_route", "resolved"]
+        },
+        "assignedTechName": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "slaTargetMinutes": {
+          "type": "number"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["ticketId", "customerUid", "district", "veng", "category", "lat", "lng", "status", "slaTargetMinutes", "createdAt", "updatedAt"]
+    },
+    "TestConnectionDoc": {
+      "title": "TestConnectionDoc",
+      "description": "Connection probe document checked once at client startup.",
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        }
+      },
+      "required": ["ok"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/public/{docId}": {
+      "schema": { "$ref": "#/entities/UserPublicProfile" },
+      "description": "Non-PII public profile and RBAC role record for authenticated user."
+    },
+    "/users/{userId}/private/{docId}": {
+      "schema": { "$ref": "#/entities/UserPrivateInfo" },
+      "description": "Owner-isolated PII record (email, phone, Veng address)."
+    },
+    "/admins/{adminUid}": {
+      "schema": { "$ref": "#/entities/AdminRegistryEntry" },
+      "description": "Super Admin role registry checked by Firestore rules."
+    },
+    "/districts/{district}/runners/{partnerId}": {
+      "schema": { "$ref": "#/entities/DistrictRunnerLocation" },
+      "description": "Live district-scoped GPS runner telemetry."
+    },
+    "/districts/{district}/orders/{orderId}": {
+      "schema": { "$ref": "#/entities/DistrictLiveOrder" },
+      "description": "Real-time district-scoped errand & order status."
+    },
+    "/districts/{district}/sos/{ticketId}": {
+      "schema": { "$ref": "#/entities/DistrictSosAlert" },
+      "description": "Real-time 24x7 district-scoped SOS alerts."
+    },
+    "/test/{docId}": {
+      "schema": { "$ref": "#/entities/TestConnectionDoc" },
+      "description": "Read-only client boot connection validation document."
+    }
+  }
+}

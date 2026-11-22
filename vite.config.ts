@@ -15,8 +15,8 @@ export default defineConfig(() => {
         includeAssets: ['icon.svg', 'apple-touch-icon.png', 'pwa-192x192.png', 'pwa-512x512.png', 'pwa-maskable-512x512.png'],
         manifest: {
           id: '/',
-          name: 'ZoRun — Mizoram Services',
-          short_name: 'ZoRun',
+          name: 'ZoRûn — Mizoram Services',
+          short_name: 'ZoRûn',
           description:
             'Standalone mobile app for Mizoram errands, Check-Before-Pay marketplace, Awmpui staffing, and 24x7 SOS.',
           theme_color: '#0F766E',

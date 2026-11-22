@@ -2,17 +2,20 @@ import React, { Suspense, lazy, useCallback, useEffect, useRef, useState } from 
 import {
   AlertTriangle,
   ArrowLeft,
+  Briefcase,
   ChevronDown,
   Globe,
   Home,
   LogOut,
   MapPin,
+  Moon,
   RefreshCw,
   Server,
   Settings,
   Shield,
   ShoppingBag,
   Smartphone,
+  Sun,
   Terminal,
   UserCircle2,
   Users,
@@ -20,6 +23,7 @@ import {
 import type {
   AppMode,
   AppRemoteConfig,
+  CustomerWalletState,
   EmergencySosTicket,
   ErrandRequest,
   Language,
@@ -31,6 +35,7 @@ import type {
   StaffAttendanceLog,
   StaffLeaveRequest,
   StaffingBooking,
+  SumoParcelBooking,
   WorkforceMember,
 } from './shared/types';
 import { TRANSLATIONS } from './i18n/translations';
@@ -45,6 +50,7 @@ import {
   type UserAppSettings,
 } from './lib/userSettings';
 import { OfflineIndicator, PWAInstallButton } from './lib/pwa';
+import { useFirebaseAuth } from './lib/firebase';
 import { CustomerView, type CustomerTab } from './components/CustomerView';
 import { LayerWindow } from './components/LayerWindow';
 import { AppSettingsWindow } from './components/AppSettingsWindow';
@@ -105,11 +111,13 @@ interface BootstrapSnapshot {
   attendanceLogs?: StaffAttendanceLog[];
   payrollRecords: PayrollRecord[];
   tickets: EmergencySosTicket[];
+  customerWallet?: CustomerWalletState;
+  sumoParcels?: SumoParcelBooking[];
 }
 
 const DEFAULT_CONFIG: AppRemoteConfig = {
-  appName: 'ZoRun Mizoram',
-  region: 'ap-south-1',
+  appName: 'ZoRûn Mizoram',
+  region: 'asia-south1',
   sundayEmergencyMode: false,
   rainSurgeMultiplier: 1.0,
   trafficSurgeMultiplier: 1.0,
@@ -173,12 +181,15 @@ const ViewFallback: React.FC = () => (
 );
 
 export default function App() {
+  const { syncProfileDistrict } = useFirebaseAuth();
   const [mode, setMode] = useState<AppMode>(resolveInitialModeFromUrl);
   const [mobileTab, setMobileTab] = useState<MobileUserTab>(resolveInitialTabFromUrl);
   const [lang, setLang] = useState<Language>('en');
   const [selectedDistrict, setSelectedDistrict] = useState<MizoramDistrict>('Aizawl');
   const [districtSheetOpen, setDistrictSheetOpen] = useState(false);
   const [settingsSheetOpen, setSettingsSheetOpen] = useState(false);
+  const [portalMenuOpen, setPortalMenuOpen] = useState(false);
+  const portalMenuRef = useRef<HTMLDivElement | null>(null);
   const [userSettings, setUserSettings] = useState<UserAppSettings>(loadUserSettings);
   const [mapsApiKey, setMapsApiKey] = useState<string>(
     import.meta.env.VITE_GOOGLE_MAPS_API_KEY || ''
@@ -207,6 +218,33 @@ export default function App() {
   const [staffAttendanceLogs, setStaffAttendanceLogs] = useState<StaffAttendanceLog[]>([]);
   const [payrollRecords, setPayrollRecords] = useState<PayrollRecord[]>([]);
   const [sosTickets, setSosTickets] = useState<EmergencySosTicket[]>([]);
+  const [customerWallet, setCustomerWallet] = useState<CustomerWalletState>({
+    balanceRs: 320,
+    loyaltyPoints: 240,
+    referralCode: 'ZORUN-MZ-2026',
+    referralsClaimed: [],
+    plusPassActive: false,
+    transactions: [],
+  });
+
+  useEffect(() => {
+    if (!portalMenuOpen) return;
+    const handleOutside = (ev: MouseEvent) => {
+      if (portalMenuRef.current && !portalMenuRef.current.contains(ev.target as Node)) {
+        setPortalMenuOpen(false);
+      }
+    };
+    const handleKey = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape') setPortalMenuOpen(false);
+    };
+    document.addEventListener('mousedown', handleOutside);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handleOutside);
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [portalMenuOpen]);
+  const [sumoParcels, setSumoParcels] = useState<SumoParcelBooking[]>([]);
 
   const inFlightRef = useRef(false);
   const t = TRANSLATIONS[lang];
@@ -217,6 +255,14 @@ export default function App() {
     applyUserSettingsToDom(userSettings);
     saveUserSettings(userSettings);
   }, [userSettings]);
+
+  const handleDistrictChange = useCallback(
+    (next: MizoramDistrict) => {
+      setSelectedDistrict(next);
+      void syncProfileDistrict(next);
+    },
+    [syncProfileDistrict]
+  );
 
   const handleUpdateUserSettings = useCallback((patch: Partial<UserAppSettings>) => {
     setUserSettings((prev) => ({ ...prev, ...patch }));
@@ -245,6 +291,8 @@ export default function App() {
     if (Array.isArray(data.attendanceLogs)) setStaffAttendanceLogs(data.attendanceLogs);
     if (Array.isArray(data.payrollRecords)) setPayrollRecords(data.payrollRecords);
     if (Array.isArray(data.tickets)) setSosTickets(data.tickets);
+    if (data.customerWallet) setCustomerWallet(data.customerWallet);
+    if (Array.isArray(data.sumoParcels)) setSumoParcels(data.sumoParcels);
   }, []);
 
   // Single-roundtrip gzipped bootstrap replaces 7 parallel fetches
@@ -483,7 +531,7 @@ export default function App() {
               <select
                 aria-label="District Capital"
                 value={selectedDistrict}
-                onChange={(e) => setSelectedDistrict(e.target.value as MizoramDistrict)}
+                onChange={(e) => handleDistrictChange(e.target.value as MizoramDistrict)}
                 className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-emerald-900 focus:border-emerald-700 focus:outline-none"
               >
                 {ALL_MIZORAM_DISTRICT_NAMES.map((d) => {
@@ -628,7 +676,7 @@ export default function App() {
               : 'customer';
 
   return (
-    <div className="min-h-dvh bg-[#f4f6f5] text-slate-900 flex flex-col overflow-x-hidden">
+    <div className="min-h-dvh bg-[#f4f6f5] dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col overflow-x-hidden transition-colors">
       {quotaExceeded && (
         <div className="bg-amber-50 border-b border-amber-200 text-amber-900 px-4 py-2.5 text-xs md:text-sm text-center sticky top-0 z-50 shadow-sm">
           <span>
@@ -647,16 +695,16 @@ export default function App() {
       )}
 
       {/* Single Lightweight Mobile App Top Bar (fast GPU-friendly solid translucent bg) */}
-      <header className="sticky top-0 z-40 bg-white/96 border-b border-slate-200/70 pt-safe">
-        <div className="mx-auto max-w-6xl flex items-center justify-between gap-4 px-4 sm:px-6 h-14">
-          <div className="flex items-center gap-3 min-w-0">
+      <header className="sticky top-0 z-40 bg-white/96 dark:bg-slate-900/95 border-b border-slate-200/70 dark:border-slate-800 pt-safe">
+        <div className="mx-auto max-w-6xl flex items-center justify-between gap-2 sm:gap-4 px-3.5 sm:px-6 h-14">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
             <a
               href="/"
               onClick={(e) => {
                 e.preventDefault();
                 navigateMode('customer', 'errands');
               }}
-              className="text-xl font-extrabold tracking-tight text-emerald-900 whitespace-nowrap shrink-0 font-display"
+              className="text-xl font-extrabold tracking-tight text-emerald-900 dark:text-emerald-400 whitespace-nowrap shrink-0 font-display"
             >
               {t.brand}
             </a>
@@ -668,73 +716,88 @@ export default function App() {
                 setDistrictSheetOpen(true);
               }}
               aria-label="Choose Mizoram District"
-              className="inline-flex items-center gap-1 min-h-[36px] rounded-xl bg-slate-100 hover:bg-slate-200/80 active:scale-[0.98] px-2.5 py-1 text-xs font-semibold text-slate-800 transition-transform truncate max-w-[140px] sm:max-w-none"
+              className="inline-flex items-center gap-1 min-h-[36px] rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200/80 dark:hover:bg-slate-700 active:scale-[0.98] px-2.5 py-1 text-xs font-semibold text-slate-800 dark:text-slate-100 transition-transform max-w-[140px] sm:max-w-none shrink-0"
             >
-              <MapPin className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+              <MapPin className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400 shrink-0" />
               <span className="truncate">{selectedDistrict}</span>
-              <ChevronDown className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+              <ChevronDown className="w-3.5 h-3.5 text-slate-500 dark:text-slate-400 shrink-0" />
             </button>
           </div>
 
-          <nav aria-label="User app navigation" className="hidden md:flex items-center gap-5 text-sm font-medium text-slate-600">
+          <nav aria-label="Customer navigation" className="hidden md:flex items-center gap-4 text-sm font-medium text-slate-600 dark:text-slate-300">
             <button
               type="button"
               onClick={() => navigateMode('customer', 'errands')}
-              className={`whitespace-nowrap shrink-0 transition-colors hover:text-slate-900 pb-0.5 ${
+              className={`whitespace-nowrap shrink-0 transition-colors hover:text-slate-900 dark:hover:text-white pb-0.5 ${
                 mode === 'customer' && mobileTab !== 'profile'
-                  ? 'text-emerald-800 font-semibold border-b-2 border-emerald-700'
+                  ? 'text-emerald-800 dark:text-emerald-400 font-semibold border-b-2 border-emerald-700 dark:border-emerald-400'
                   : ''
               }`}
             >
-              Home
+              {lang === 'miz' ? 'In (Home)' : 'Home'}
             </button>
-            <button
-              type="button"
-              onClick={() => navigateMode('partner')}
-              className={`whitespace-nowrap shrink-0 transition-colors hover:text-slate-900 pb-0.5 ${
-                mode === 'partner' ? 'text-emerald-800 font-semibold border-b-2 border-emerald-700' : ''
-              }`}
-            >
-              {t.navPartner}
-            </button>
-            <button
-              type="button"
-              onClick={() => navigateMode('staff')}
-              className={`whitespace-nowrap shrink-0 transition-colors hover:text-slate-900 pb-0.5 ${
-                mode === 'staff' ? 'text-emerald-800 font-semibold border-b-2 border-emerald-700' : ''
-              }`}
-            >
-              {t.navStaff}
-            </button>
-            <button
-              type="button"
-              onClick={() => navigateMode('merchant')}
-              className={`whitespace-nowrap shrink-0 transition-colors hover:text-slate-900 pb-0.5 ${
-                mode === 'merchant' ? 'text-emerald-800 font-semibold border-b-2 border-emerald-700' : ''
-              }`}
-            >
-              {t.navMerchant}
-            </button>
-            <button
-              type="button"
-              onClick={() => navigateMode('customer', 'profile')}
-              className={`whitespace-nowrap shrink-0 transition-colors hover:text-slate-900 pb-0.5 ${
-                (mode === 'customer' && mobileTab === 'profile') ||
-                mode === 'technician' ||
-                mode === 'apply'
-                  ? 'text-emerald-800 font-semibold border-b-2 border-emerald-700'
-                  : ''
-              }`}
-            >
-              {lang === 'miz' ? 'Portals' : 'All Portals'}
-            </button>
-            <button
-              type="button"
-              onClick={() => navigateMode('admin')}
-              className="whitespace-nowrap shrink-0 transition-colors hover:text-slate-900 pb-0.5"
-            >
-              {t.openBackendWebLabel}
-            </button>
+
+            {/* Single Clean "Work with ZoRûn" Role Portals Dropdown (excludes /admin & /backend) */}
+            <div ref={portalMenuRef} className="relative">
+              <button
+                type="button"
+                aria-expanded={portalMenuOpen}
+                aria-haspopup="menu"
+                onClick={() => {
+                  triggerHaptic('light');
+                  setPortalMenuOpen((prev) => !prev);
+                }}
+                className={`inline-flex items-center gap-1.5 min-h-[36px] rounded-xl px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
+                  mode !== 'customer' || portalMenuOpen
+                    ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-900 dark:text-emerald-300'
+                    : 'text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
+                }`}
+              >
+                <Briefcase className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" />
+                <span>{lang === 'miz' ? 'ZoRûn-ah Thawk Ve' : 'Work with ZoRûn'}</span>
+                <ChevronDown
+                  className={`w-3.5 h-3.5 text-slate-400 transition-transform ${
+                    portalMenuOpen ? 'rotate-180' : ''
+                  }`}
+                />
+              </button>
+
+              {portalMenuOpen && (
+                <div
+                  role="menu"
+                  className="absolute right-0 mt-2 w-64 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-xl py-1.5 z-50"
+                >
+                  <p className="px-3.5 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                    {lang === 'miz' ? 'Partner & Staff Portals' : 'Partner & Provider Portals'}
+                  </p>
+                  {(
+                    [
+                      ['partner', t.navPartner, lang === 'miz' ? 'Runner, Bike, Taxi & Pickup' : 'Runner, Bike, Taxi & Pickup'],
+                      ['staff', t.navStaff, lang === 'miz' ? 'Awmpui & Family Driver' : 'Awmpui & Family Driver'],
+                      ['merchant', t.navMerchant, lang === 'miz' ? 'Dawr & AI Magic Listing' : 'Shop & AI Magic Listing'],
+                      ['technician', t.navTechnician, lang === 'miz' ? '24×7 SOS Responder' : '24×7 SOS Responder'],
+                      ['apply', t.navApply, lang === 'miz' ? 'KYC & Hna Dilna Thar' : 'Join ZoRûn · Apply KYC'],
+                    ] as const
+                  ).map(([targetMode, label, sub]) => (
+                    <button
+                      key={targetMode}
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setPortalMenuOpen(false);
+                        navigateMode(targetMode);
+                      }}
+                      className={`w-full px-3.5 py-2 text-left hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors ${
+                        mode === targetMode ? 'bg-emerald-50/70 dark:bg-emerald-950/40' : ''
+                      }`}
+                    >
+                      <p className="text-xs font-bold text-slate-900 dark:text-slate-100">{label}</p>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400">{sub}</p>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </nav>
 
           <div className="flex items-center gap-1.5 shrink-0">
@@ -742,10 +805,31 @@ export default function App() {
               type="button"
               onClick={() => {
                 triggerHaptic('light');
+                handleUpdateUserSettings({
+                  theme: userSettings.theme === 'dark' ? 'light' : 'dark',
+                });
+              }}
+              aria-label={
+                userSettings.theme === 'dark'
+                  ? 'Switch to Light Mode'
+                  : 'Switch to Dark Mode'
+              }
+              className="inline-flex items-center justify-center min-h-[40px] min-w-[40px] rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200/80 dark:hover:bg-slate-700 active:scale-[0.97] text-slate-700 dark:text-amber-300 transition-transform"
+            >
+              {userSettings.theme === 'dark' ? (
+                <Sun className="w-[18px] h-[18px]" />
+              ) : (
+                <Moon className="w-[18px] h-[18px]" />
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                triggerHaptic('light');
                 setLang((prev) => (prev === 'en' ? 'miz' : 'en'));
               }}
               aria-label="Toggle language between Mizo and English"
-              className="inline-flex items-center justify-center min-h-[40px] min-w-[40px] rounded-xl bg-slate-100 hover:bg-slate-200/80 active:scale-[0.97] px-2.5 text-xs font-bold text-slate-800 transition-transform whitespace-nowrap"
+              className="inline-flex items-center justify-center min-h-[40px] min-w-[40px] rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200/80 dark:hover:bg-slate-700 active:scale-[0.97] px-2.5 text-xs font-bold text-slate-800 dark:text-slate-100 transition-transform whitespace-nowrap"
             >
               {lang === 'en' ? 'MIZ' : 'EN'}
             </button>
@@ -756,11 +840,13 @@ export default function App() {
                 setSettingsSheetOpen(true);
               }}
               aria-label={lang === 'miz' ? 'App Settings hawng rawh' : 'Open App Settings'}
-              className="inline-flex items-center justify-center min-h-[40px] min-w-[40px] rounded-xl bg-slate-100 hover:bg-slate-200/80 active:scale-[0.97] text-slate-700 transition-transform"
+              className="inline-flex items-center justify-center min-h-[40px] min-w-[40px] rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200/80 dark:hover:bg-slate-700 active:scale-[0.97] text-slate-700 dark:text-slate-200 transition-transform"
             >
               <Settings className="w-[18px] h-[18px]" />
             </button>
-            <PWAInstallButton lang={lang} />
+            <div className="hidden sm:block">
+              <PWAInstallButton lang={lang} />
+            </div>
           </div>
         </div>
       </header>
@@ -806,7 +892,7 @@ export default function App() {
           <CustomerView
             lang={lang}
             selectedDistrict={selectedDistrict}
-            onChangeDistrict={setSelectedDistrict}
+            onChangeDistrict={handleDistrictChange}
             onOpenDistrictPicker={() => setDistrictSheetOpen(true)}
             activeTab={mobileTab}
             onChangeTab={(next) => selectCustomerTab(next)}
@@ -821,7 +907,10 @@ export default function App() {
             workforce={workforce}
             staffingBookings={staffingBookings}
             sosTickets={sosTickets}
+            customerWallet={customerWallet}
+            sumoParcels={sumoParcels}
             userSettings={userSettings}
+            onUpdateUserSettings={handleUpdateUserSettings}
             onOpenSettings={() => setSettingsSheetOpen(true)}
             onOpenApply={() => navigateMode('apply')}
             onOpenStaffPortal={() => navigateMode('staff')}
@@ -835,7 +924,7 @@ export default function App() {
               lang={lang}
               onToggleLang={() => setLang((prev) => (prev === 'en' ? 'miz' : 'en'))}
               selectedDistrict={selectedDistrict}
-              onChangeDistrict={setSelectedDistrict}
+              onChangeDistrict={handleDistrictChange}
               activeUserMode={activeUserRole}
               onSelectMode={(next) => {
                 if (next === 'customer') {
@@ -904,6 +993,37 @@ export default function App() {
         </Suspense>
       </main>
 
+      {/* Clean Customer Footer with Work with ZoRûn Portals (No /admin or /backend links) */}
+      {mode === 'customer' && (
+        <footer className="hidden md:block border-t border-slate-200/80 dark:border-slate-800 bg-white/80 dark:bg-slate-900/70">
+          <div className="mx-auto max-w-6xl px-6 py-4 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-500 dark:text-slate-400">
+            <span className="font-semibold text-slate-700 dark:text-slate-300">
+              {t.brand} · {selectedDistrict} ({getDistrictInfo(selectedDistrict).rtoCode})
+            </span>
+            <div className="flex flex-wrap items-center gap-4">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                {lang === 'miz' ? 'ZoRûn-ah Thawk Ve:' : 'Work with ZoRûn:'}
+              </span>
+              <button type="button" onClick={() => navigateMode('partner')} className="hover:text-emerald-800 dark:hover:text-emerald-400 font-medium">
+                {t.navPartner}
+              </button>
+              <button type="button" onClick={() => navigateMode('staff')} className="hover:text-emerald-800 dark:hover:text-emerald-400 font-medium">
+                {t.navStaff}
+              </button>
+              <button type="button" onClick={() => navigateMode('merchant')} className="hover:text-emerald-800 dark:hover:text-emerald-400 font-medium">
+                {t.navMerchant}
+              </button>
+              <button type="button" onClick={() => navigateMode('technician')} className="hover:text-emerald-800 dark:hover:text-emerald-400 font-medium">
+                {t.navTechnician}
+              </button>
+              <button type="button" onClick={() => navigateMode('apply')} className="text-emerald-800 dark:text-emerald-400 font-bold hover:underline">
+                {t.navApply}
+              </button>
+            </div>
+          </div>
+        </footer>
+      )}
+
       <LayerWindow
         open={districtSheetOpen}
         onClose={() => setDistrictSheetOpen(false)}
@@ -921,18 +1041,18 @@ export default function App() {
                 type="button"
                 onClick={() => {
                   triggerHaptic('light');
-                  setSelectedDistrict(d);
+                  handleDistrictChange(d);
                   setDistrictSheetOpen(false);
                 }}
                 className={`w-full min-h-[54px] px-4 py-3 rounded-2xl flex items-center justify-between text-left transition-colors ${
                   active
                     ? 'bg-emerald-900 text-white shadow-sm'
-                    : 'bg-slate-50 text-slate-900 hover:bg-slate-100'
+                    : 'bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-700'
                 }`}
               >
                 <div>
                   <p className="text-sm font-bold">{d}</p>
-                  <p className={`text-xs ${active ? 'text-emerald-200' : 'text-slate-500'}`}>
+                  <p className={`text-xs ${active ? 'text-emerald-200' : 'text-slate-500 dark:text-slate-400'}`}>
                     {info.rtoCode} · {info.vengs.length} Vengs · {info.elevationM}m
                   </p>
                 </div>
@@ -949,7 +1069,7 @@ export default function App() {
         lang={lang}
         onChangeLang={setLang}
         selectedDistrict={selectedDistrict}
-        onChangeDistrict={setSelectedDistrict}
+        onChangeDistrict={handleDistrictChange}
         settings={userSettings}
         onUpdateSettings={handleUpdateUserSettings}
         onResetSettings={handleResetUserSettings}
@@ -962,15 +1082,15 @@ export default function App() {
       {/* Fast GPU-composited Mobile Bottom Tab Bar */}
       <nav
         aria-label="Mobile standalone app navigation"
-        className="md:hidden fixed bottom-0 left-0 right-0 z-40 border-t border-slate-200/80 bg-white shadow-[0_-4px_20px_rgba(15,23,42,0.06)] grid grid-cols-5 h-16 pb-safe"
+        className="md:hidden fixed bottom-0 left-0 right-0 z-40 border-t border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-[0_-4px_20px_rgba(15,23,42,0.06)] grid grid-cols-5 h-16 pb-safe"
       >
         <button
           type="button"
           onClick={() => selectCustomerTab('errands')}
           className={`flex flex-col items-center justify-center gap-0.5 text-[10px] active:scale-95 transition-transform ${
             mode === 'customer' && mobileTab === 'errands'
-              ? 'text-emerald-800 font-bold'
-              : 'text-slate-500 font-medium'
+              ? 'text-emerald-800 dark:text-emerald-400 font-bold'
+              : 'text-slate-500 dark:text-slate-400 font-medium'
           }`}
         >
           <Home className="w-[21px] h-[21px]" strokeWidth={mode === 'customer' && mobileTab === 'errands' ? 2.4 : 1.9} />
@@ -982,8 +1102,8 @@ export default function App() {
           onClick={() => selectCustomerTab('marketplace')}
           className={`flex flex-col items-center justify-center gap-0.5 text-[10px] active:scale-95 transition-transform ${
             mode === 'customer' && mobileTab === 'marketplace'
-              ? 'text-emerald-800 font-bold'
-              : 'text-slate-500 font-medium'
+              ? 'text-emerald-800 dark:text-emerald-400 font-bold'
+              : 'text-slate-500 dark:text-slate-400 font-medium'
           }`}
         >
           <ShoppingBag className="w-[21px] h-[21px]" strokeWidth={mode === 'customer' && mobileTab === 'marketplace' ? 2.4 : 1.9} />
@@ -995,8 +1115,8 @@ export default function App() {
           onClick={() => selectCustomerTab('workforce')}
           className={`flex flex-col items-center justify-center gap-0.5 text-[10px] active:scale-95 transition-transform ${
             mode === 'customer' && mobileTab === 'workforce'
-              ? 'text-emerald-800 font-bold'
-              : 'text-slate-500 font-medium'
+              ? 'text-emerald-800 dark:text-emerald-400 font-bold'
+              : 'text-slate-500 dark:text-slate-400 font-medium'
           }`}
         >
           <Users className="w-[21px] h-[21px]" strokeWidth={mode === 'customer' && mobileTab === 'workforce' ? 2.4 : 1.9} />
@@ -1008,8 +1128,8 @@ export default function App() {
           onClick={() => selectCustomerTab('sos')}
           className={`flex flex-col items-center justify-center gap-0.5 text-[10px] active:scale-95 transition-transform ${
             mode === 'customer' && mobileTab === 'sos'
-              ? 'text-red-600 font-bold'
-              : 'text-red-600/80 font-semibold'
+              ? 'text-red-600 dark:text-red-400 font-bold'
+              : 'text-red-600/80 dark:text-red-400/80 font-semibold'
           }`}
         >
           <AlertTriangle className="w-[21px] h-[21px]" strokeWidth={mode === 'customer' && mobileTab === 'sos' ? 2.4 : 2} />
@@ -1026,8 +1146,8 @@ export default function App() {
             mode === 'merchant' ||
             mode === 'technician' ||
             mode === 'apply'
-              ? 'text-emerald-800 font-bold'
-              : 'text-slate-500 font-medium'
+              ? 'text-emerald-800 dark:text-emerald-400 font-bold'
+              : 'text-slate-500 dark:text-slate-400 font-medium'
           }`}
         >
           <UserCircle2

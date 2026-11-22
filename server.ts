@@ -3,6 +3,7 @@ import express from 'express';
 import http from 'http';
 import path from 'path';
 import zlib from 'zlib';
+import cron from 'node-cron';
 import { createServer as createViteServer } from 'vite';
 import { authKycRouter } from './server/modules/auth-kyc';
 import { errandFleetRouter } from './server/modules/errand-fleet';
@@ -12,12 +13,26 @@ import { emergency24x7Router } from './server/modules/emergency-24x7';
 import { paymentEscrowRouter } from './server/modules/payment-escrow';
 import { remoteConfigSduiRouter } from './server/modules/remote-config-sdui';
 import { devStudioAiRouter } from './server/modules/dev-studio-ai';
+import { premiumServicesRouter } from './server/modules/premium-services';
+import { mediaStorageRouter } from './server/modules/media-storage';
 import { realtimeHub } from './server/infrastructure/realtimeHub';
 import { db } from './server/infrastructure/store';
+import { checkDriveFoldersHealth } from './server/infrastructure/driveStorage';
+import { getFirebaseAdminStatus, optionalFirebaseAuth } from './server/infrastructure/firebaseAdmin';
+import { verifyLedgerIntegrity } from './server/infrastructure/ledgerService';
 import { evaluateSduiServiceVisibility } from './server/domain/rules';
 import { requireAdminAuth } from './server/infrastructure/adminAuth';
+import { findNearestMizoramVeng } from './src/data/mizoramDistricts';
 
 const SERVER_STARTED_AT = Date.now();
+
+const cronWorkerState = {
+  active: true,
+  schedule: '* * * * *',
+  runCount: 0,
+  lastRunAt: null as string | null,
+  slaBreachesDetected: 0,
+};
 
 /**
  * Lightweight zero-dependency gzip middleware for JSON, JS, CSS, HTML & SVG
@@ -73,6 +88,9 @@ async function startServer() {
     next();
   });
 
+  // Verify optional Firebase ID tokens attached by authenticated PWA clients
+  app.use('/api', optionalFirebaseAuth);
+
   // Modular micro-service route isolation
   app.use('/api/auth-kyc', authKycRouter);
   app.use('/api/errands', errandFleetRouter);
@@ -82,6 +100,8 @@ async function startServer() {
   app.use('/api/escrow', paymentEscrowRouter);
   app.use('/api/sdui', remoteConfigSduiRouter);
   app.use('/api/dev-studio', devStudioAiRouter);
+  app.use('/api/premium', premiumServicesRouter);
+  app.use('/api/media', mediaStorageRouter);
 
   const resolvePublicMapsApiKey = (): string => {
     const candidates = [
@@ -123,6 +143,8 @@ async function startServer() {
       attendanceLogs: state.staffAttendanceLogs,
       payrollRecords: state.payrollRecords,
       tickets: state.sosTickets,
+      customerWallet: state.customerWallet,
+      sumoParcels: state.sumoParcels,
     });
   });
 
@@ -131,16 +153,153 @@ async function startServer() {
     const mapsApiKey = resolvePublicMapsApiKey();
     res.json({
       mapsApiKey,
-      region: 'ap-south-1',
+      region: 'asia-south1',
     });
   });
 
-  // Server Backend Web App live system telemetry & microservice catalog
-  app.get('/api/system/status', requireAdminAuth, (_req, res) => {
+  // Server-side Reverse Geocoding proxy (avoids browser CORS trap & keeps Geocoding calls compliant)
+  app.get('/api/maps/reverse-geocode', async (req, res) => {
+    const lat = Number(req.query.lat);
+    const lng = Number(req.query.lng);
+    if (
+      !Number.isFinite(lat) ||
+      !Number.isFinite(lng) ||
+      lat < -90 ||
+      lat > 90 ||
+      lng < -180 ||
+      lng > 180
+    ) {
+      res.status(400).json({ error: 'Valid numeric lat and lng query parameters are required.' });
+      return;
+    }
+
+    const nearest = findNearestMizoramVeng(lat, lng);
+    const coordsLabel = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+    const fallbackLandmark = nearest.isWithinMizoramBounds
+      ? nearest.distanceMeters <= 350
+        ? `${nearest.veng.label} (${nearest.veng.zone} Zone)`
+        : `Near ${nearest.veng.label} (~${(nearest.distanceMeters / 1000).toFixed(1)} km)`
+      : `GPS Pin (${coordsLabel})`;
+    const fallbackAddress = nearest.isWithinMizoramBounds
+      ? `${nearest.veng.name}, ${nearest.veng.district}, Mizoram (${coordsLabel})`
+      : `Pinned GPS (${coordsLabel}) · Nearest Hub: ${nearest.veng.name}, ${nearest.veng.district}`;
+
+    const apiKey = resolvePublicMapsApiKey();
+    if (!apiKey) {
+      res.json({
+        lat: Number(lat.toFixed(6)),
+        lng: Number(lng.toFixed(6)),
+        district: nearest.veng.district,
+        veng: nearest.veng.name,
+        zone: nearest.veng.zone,
+        elevationM: nearest.veng.elevationM,
+        landmark: fallbackLandmark,
+        formattedAddress: fallbackAddress,
+        isWithinMizoramBounds: nearest.isWithinMizoramBounds,
+        distanceToVengMeters: nearest.distanceMeters,
+        source: 'mizoram_veng_index',
+      });
+      return;
+    }
+
+    try {
+      const url = new URL('https://geocode.googleapis.com/v4/geocode/location');
+      url.searchParams.set('location.latitude', String(lat));
+      url.searchParams.set('location.longitude', String(lng));
+      url.searchParams.set('languageCode', 'en');
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 3000);
+      const gmRes = await fetch(url.toString(), {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Goog-Api-Key': apiKey,
+          'X-Goog-FieldMask': 'results.placeId,results.formattedAddress,results.addressComponents,plusCode',
+          'X-Goog-Maps-Solution-ID': 'gmp_mcp_codeassist_v1_aistudio',
+        },
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+
+      if (gmRes.ok) {
+        const gmData = (await gmRes.json()) as {
+          results?: Array<{
+            formattedAddress?: string;
+            addressComponents?: Array<{ longText?: string; shortText?: string; types?: string[] }>;
+            plusCode?: { compoundCode?: string; globalCode?: string };
+          }>;
+          plusCode?: { compoundCode?: string; globalCode?: string };
+        };
+        const top = gmData.results?.[0];
+        if (top?.formattedAddress) {
+          const components = top.addressComponents || [];
+          const sublocality =
+            components.find((c) => c.types?.includes('sublocality_level_1'))?.longText ||
+            components.find((c) => c.types?.includes('neighborhood'))?.longText ||
+            components.find((c) => c.types?.includes('route'))?.longText;
+          const plusCode = top.plusCode?.compoundCode || gmData.plusCode?.compoundCode;
+
+          res.json({
+            lat: Number(lat.toFixed(6)),
+            lng: Number(lng.toFixed(6)),
+            district: nearest.veng.district,
+            veng: nearest.veng.name,
+            zone: nearest.veng.zone,
+            elevationM: nearest.veng.elevationM,
+            landmark: sublocality || fallbackLandmark,
+            formattedAddress: top.formattedAddress,
+            plusCode,
+            isWithinMizoramBounds: nearest.isWithinMizoramBounds,
+            distanceToVengMeters: nearest.distanceMeters,
+            source: 'google_geocoding',
+          });
+          return;
+        }
+      }
+    } catch {
+      // Fall through cleanly to local Mizoram Veng index
+    }
+
+    res.json({
+      lat: Number(lat.toFixed(6)),
+      lng: Number(lng.toFixed(6)),
+      district: nearest.veng.district,
+      veng: nearest.veng.name,
+      zone: nearest.veng.zone,
+      elevationM: nearest.veng.elevationM,
+      landmark: fallbackLandmark,
+      formattedAddress: fallbackAddress,
+      isWithinMizoramBounds: nearest.isWithinMizoramBounds,
+      distanceToVengMeters: nearest.distanceMeters,
+      source: 'mizoram_veng_index',
+    });
+  });
+
+  // Server Backend Web App live system telemetry: Firebase, Persistence, Ledger, Google Drive, Maps & Cron SLA
+  app.get('/api/system/status', requireAdminAuth, async (req, res) => {
     const state = db.get();
+    const driveToken = req.header('x-google-access-token') || undefined;
+    const [databaseHealth, driveStorage] = await Promise.all([
+      db.checkDatabaseHealth(),
+      checkDriveFoldersHealth(driveToken),
+    ]);
+    const hasMapsKey = Boolean(resolvePublicMapsApiKey());
+
     res.json({
       status: 'operational',
-      region: state.remoteConfig.region || 'ap-south-1',
+      region: state.remoteConfig.region || 'asia-south1',
+      firebase: getFirebaseAdminStatus(),
+      storage: db.getStorageInfo(),
+      database: databaseHealth,
+      driveStorage,
+      ledgerIntegrity: verifyLedgerIntegrity(state),
+      mapsPlatform: {
+        routesMatrixReady: true,
+        geocodingReady: true,
+        hasApiKey: hasMapsKey,
+      },
+      cronWorker: cronWorkerState,
       uptimeSeconds: Math.floor((Date.now() - SERVER_STARTED_AT) / 1000),
       connectedMobileClients: realtimeHub.getClientCount(),
       sundayEmergencyMode: state.remoteConfig.sundayEmergencyMode,
@@ -161,15 +320,16 @@ async function startServer() {
       },
       auditLogs: state.auditLogs.slice(0, 10),
       endpoints: [
-        { key: 'bootstrap', name: 'Unified Mobile Bootstrap', method: 'GET', path: '/api/bootstrap', purpose: 'Single-roundtrip gzipped mobile boot payload' },
+        { key: 'bootstrap', name: 'Unified Mobile Bootstrap', method: 'GET', path: '/api/bootstrap', purpose: 'Single-roundtrip gzipped mobile boot payload (<50ms)' },
+        { key: 'media-health', name: 'Google Drive Storage Health', method: 'GET', path: '/api/media/health', purpose: 'Live probe of ZoRun/VoiceNotes, ZoRun/Receipts & private ZoRun/KYC Drive folders' },
         { key: 'sdui', name: 'Remote Config & SDUI', method: 'GET', path: '/api/sdui/config', purpose: 'Zero-install feature flags, surge rates & Sunday Mode' },
         { key: 'errands', name: 'Errands & Corridor Fleet', method: 'GET', path: '/api/errands/partners', purpose: '11-District Runner & fleet live roster' },
-        { key: 'jobs', name: 'Active Errand Dispatch', method: 'GET', path: '/api/errands/jobs', purpose: 'Live errands, bidding & handover OTP state' },
+        { key: 'jobs', name: 'Active Errand Dispatch', method: 'GET', path: '/api/errands/jobs', purpose: 'Live errands, Routes API v2 distances, Kailawn surcharges & OTP state' },
         { key: 'marketplace', name: 'Marketplace & AI Listing', method: 'GET', path: '/api/marketplace/products', purpose: 'Check-Before-Pay shops, hygiene guard & orders' },
         { key: 'staffing', name: 'Workforce, HR & Payroll', method: 'GET', path: '/api/staffing/directory', purpose: 'Awmpui/Driver CRUD, contracts, leave, replacement & bank payroll' },
-        { key: 'emergency', name: '24x7 Rapid SOS', method: 'GET', path: '/api/emergency/tickets', purpose: '12-category 30s SLA emergency dispatch & technician updates' },
-        { key: 'kyc', name: 'Onboarding & KYC Vetting', method: 'GET', path: '/api/auth-kyc/queue', purpose: 'Public /apply onboarding, PVC/YMA vetting & live auto-publish' },
-        { key: 'escrow', name: 'Escrow & GST Ledger', method: 'GET', path: '/api/escrow/ledger', purpose: 'UPI escrow splits, GST & dispute safeguards' },
+        { key: 'emergency', name: '24x7 Rapid SOS', method: 'GET', path: '/api/emergency/tickets', purpose: '12-category 30s SLA emergency dispatch & sliding-window rate guard' },
+        { key: 'kyc', name: 'Onboarding & KYC Vetting', method: 'GET', path: '/api/auth-kyc/queue', purpose: 'Public /apply onboarding, private KYC signed URLs & live auto-publish' },
+        { key: 'escrow', name: 'Double-Entry & GST Ledger', method: 'GET', path: '/api/escrow/ledger', purpose: 'ACID-style double-entry journals, 18% GST splits & dispute safeguards' },
       ],
     });
   });
@@ -180,7 +340,7 @@ async function startServer() {
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
     res.flushHeaders();
-    res.write(`event: connected\ndata: ${JSON.stringify({ region: 'ap-south-1' })}\n\n`);
+    res.write(`event: connected\ndata: ${JSON.stringify({ region: 'asia-south1' })}\n\n`);
     realtimeHub.addClient(res);
 
     const keepAlive = setInterval(() => {
@@ -238,8 +398,54 @@ async function startServer() {
     });
   }
 
+  await db.initAsync();
+
+  // Automated 60-second node-cron SLA monitor for open 24x7 SOS tickets and stale bidding errands
+  cron.schedule(cronWorkerState.schedule, () => {
+    const nowMs = Date.now();
+    const state = db.get();
+    cronWorkerState.runCount += 1;
+    cronWorkerState.lastRunAt = new Date(nowMs).toISOString();
+
+    let breachesInPass = 0;
+
+    for (const ticket of state.sosTickets) {
+      if (ticket.status !== 'resolved') {
+        const elapsedMinutes = (nowMs - new Date(ticket.createdAt).getTime()) / 60_000;
+        if (elapsedMinutes > ticket.slaTargetMinutes) {
+          breachesInPass += 1;
+          realtimeHub.broadcast('sos_alert', {
+            slaEscalation: true,
+            ticketId: ticket.id,
+            district: ticket.district || 'Aizawl',
+            elapsedMinutes: Math.round(elapsedMinutes),
+          });
+        }
+      }
+    }
+
+    for (const job of state.errands) {
+      if (job.status === 'bidding') {
+        const elapsedMinutes = (nowMs - new Date(job.createdAt).getTime()) / 60_000;
+        if (elapsedMinutes > 15) {
+          breachesInPass += 1;
+          realtimeHub.broadcast('errand_update', {
+            staleBiddingOrderId: job.id,
+            district: job.district || 'Aizawl',
+            elapsedMinutes: Math.round(elapsedMinutes),
+          });
+        }
+      }
+    }
+
+    cronWorkerState.slaBreachesDetected = breachesInPass;
+  });
+
   httpServer.listen(PORT, '0.0.0.0', () => {
-    console.log(`ZoRun ap-south-1 server listening on http://localhost:${PORT}`);
+    const storageInfo = db.getStorageInfo();
+    console.log(
+      `ZoRun ${storageInfo.region} server listening on http://localhost:${PORT} [${storageInfo.driver}]`
+    );
   });
 }
 

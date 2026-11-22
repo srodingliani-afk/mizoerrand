@@ -3,6 +3,12 @@ import { Type } from '@google/genai';
 import { db } from '../infrastructure/store';
 import { getGeminiClient } from '../infrastructure/geminiClient';
 import { realtimeHub } from '../infrastructure/realtimeHub';
+import { isTrustedMediaUrl } from '../infrastructure/driveStorage';
+import {
+  postEscrowHoldJournal,
+  postEscrowSettlementJournal,
+  recordDoubleEntryJournal,
+} from '../infrastructure/ledgerService';
 import { calculateEscrowSplit, validateCheckBeforePayReturn } from '../domain/rules';
 import type {
   HygieneCategory,
@@ -35,7 +41,17 @@ marketplaceAiRouter.post('/orders', (req, res) => {
     customerId = 'cust-1',
     productId,
     microInsuranceOptIn = true,
-  } = req.body as { customerId?: string; productId: string; microInsuranceOptIn?: boolean };
+    voiceNoteUrl,
+    voiceNoteDurationSec,
+    voiceNoteTranscript,
+  } = req.body as {
+    customerId?: string;
+    productId: string;
+    microInsuranceOptIn?: boolean;
+    voiceNoteUrl?: string;
+    voiceNoteDurationSec?: number;
+    voiceNoteTranscript?: string;
+  };
 
   const product = state.products.find((p) => p.id === productId);
   if (!product) {
@@ -43,9 +59,36 @@ marketplaceAiRouter.post('/orders', (req, res) => {
     return;
   }
 
+  const cleanVoiceUrl = isTrustedMediaUrl(voiceNoteUrl, 'audio');
+  const cleanDuration =
+    typeof voiceNoteDurationSec === 'number' && Number.isFinite(voiceNoteDurationSec)
+      ? Math.max(1, Math.min(15, Math.round(voiceNoteDurationSec)))
+      : undefined;
+  const cleanTranscript =
+    typeof voiceNoteTranscript === 'string' && voiceNoteTranscript.trim()
+      ? voiceNoteTranscript.trim().slice(0, 200)
+      : undefined;
+
   const deliveryFee = 55;
   const microInsuranceFee = microInsuranceOptIn ? state.remoteConfig.microInsuranceSachetRs : 0;
   const allInclusiveTotal = product.price + deliveryFee + microInsuranceFee;
+
+  const chatMessages: MarketplaceOrder['chatMessages'] = [
+    {
+      sender: 'merchant',
+      text: `Chibai! Your order from ${product.shopName} (${product.veng}) is packed.`,
+      at: new Date().toISOString(),
+    },
+  ];
+  if (cleanVoiceUrl || cleanTranscript) {
+    chatMessages.push({
+      sender: 'customer',
+      text: cleanTranscript
+        ? `Voice instruction (${cleanDuration ?? 5}s): "${cleanTranscript}"`
+        : `Attached ${cleanDuration ?? 5}s Mizo voice note instruction for merchant.`,
+      at: new Date().toISOString(),
+    });
+  }
 
   const order: MarketplaceOrder = {
     id: `MKT-${Date.now().toString().slice(-5)}`,
@@ -63,13 +106,10 @@ marketplaceAiRouter.post('/orders', (req, res) => {
     hygieneCategory: product.hygieneCategory,
     returnFeeOnReject: state.remoteConfig.returnDeliveryFee,
     status: 'awaiting_inspection',
-    chatMessages: [
-      {
-        sender: 'merchant',
-        text: `Chibai! Your order from ${product.shopName} (${product.veng}) is packed.`,
-        at: new Date().toISOString(),
-      },
-    ],
+    voiceNoteUrl: cleanVoiceUrl,
+    voiceNoteDurationSec: cleanDuration,
+    voiceNoteTranscript: cleanTranscript,
+    chatMessages,
     createdAt: new Date().toISOString(),
   };
 
@@ -110,7 +150,7 @@ marketplaceAiRouter.post('/orders/:id/inspect', (req, res) => {
       microInsuranceSachet: order.microInsuranceFee,
       declaredValue: order.price,
     });
-    state.escrowLedger.unshift({
+    const entry = {
       id: `esc-${Date.now().toString().slice(-5)}`,
       orderRef: order.id,
       grossAllInclusive: split.grossAllInclusive,
@@ -119,25 +159,49 @@ marketplaceAiRouter.post('/orders/:id/inspect', (req, res) => {
       microInsuranceSachet: split.microInsuranceSachet,
       partnerPayout: split.partnerPayout,
       merchantSettlement: split.merchantSettlement,
-      paymentMode: 'upi_escrow',
-      escrowStatus: 'split_settled',
+      paymentMode: 'upi_escrow' as const,
+      escrowStatus: 'split_settled' as const,
       createdAt: new Date().toISOString(),
+    };
+    state.escrowLedger.unshift(entry);
+    postEscrowHoldJournal(state, {
+      orderRef: order.id,
+      customerId: order.customerId,
+      grossAllInclusive: order.allInclusiveTotal,
+      paymentMode: 'upi_escrow',
+    });
+    postEscrowSettlementJournal(state, {
+      entry,
+      merchantId: order.shopName,
     });
   } else {
     order.status = 'rejected_return_fee_charged';
     state.userMonthlyReturns[order.customerId] = currentReturns + 1;
+    const gstAmount = Math.round((check.returnFeeCharged * 18) / 118);
+    const partnerPayout = check.returnFeeCharged - 5 - gstAmount;
     state.escrowLedger.unshift({
       id: `esc-${Date.now().toString().slice(-5)}`,
       orderRef: `${order.id}-RET`,
       grossAllInclusive: check.returnFeeCharged,
-      gstAmount: Math.round((check.returnFeeCharged * 18) / 118),
+      gstAmount,
       platformCommission: 5,
       microInsuranceSachet: 0,
-      partnerPayout: check.returnFeeCharged - 5 - Math.round((check.returnFeeCharged * 18) / 118),
+      partnerPayout,
       merchantSettlement: 0,
       paymentMode: 'upi_escrow',
       escrowStatus: 'split_settled',
       createdAt: new Date().toISOString(),
+    });
+    recordDoubleEntryJournal(state, {
+      eventType: 'return_fee',
+      orderRef: `${order.id}-RET`,
+      description: `Check-Before-Pay return fee settled for ${order.id}`,
+      postings: [
+        { account: 'ASSET:UPI_CLEARING', side: 'debit', amountRs: check.returnFeeCharged },
+        { account: 'LIABILITY:GST_18_OUTPUT', side: 'credit', amountRs: gstAmount },
+        { account: 'REVENUE:PLATFORM_COMMISSION', side: 'credit', amountRs: 5 },
+        { account: 'PAYABLE:PARTNER:fleet', side: 'credit', amountRs: partnerPayout },
+      ],
     });
   }
 

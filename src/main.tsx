@@ -1,6 +1,7 @@
 import { createRoot } from 'react-dom/client';
 import { registerSW } from 'virtual:pwa-register';
 import App from './App.tsx';
+import { FirebaseProvider, FirestoreErrorBoundary } from './lib/firebase';
 import './index.css';
 
 // Google Maps Platform Case A Quota & Auth Defense Listeners (registered before React render)
@@ -33,4 +34,10 @@ if ('serviceWorker' in navigator) {
   });
 }
 
-createRoot(document.getElementById('root')!).render(<App />);
+createRoot(document.getElementById('root')!).render(
+  <FirestoreErrorBoundary>
+    <FirebaseProvider>
+      <App />
+    </FirebaseProvider>
+  </FirestoreErrorBoundary>
+);

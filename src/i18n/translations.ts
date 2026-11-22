@@ -56,8 +56,8 @@ export const TRANSLATIONS: Record<
   }
 > = {
   en: {
-    brand: 'ZoRun',
-    backendBrand: 'ZoRun Backend',
+    brand: 'ZoRûn',
+    backendBrand: 'ZoRûn Backend',
     navCustomer: 'Customer',
     navPartner: 'Partner',
     navStaff: 'Awmpui Staff',
@@ -106,13 +106,13 @@ export const TRANSLATIONS: Record<
     installedStandaloneLabel: 'Standalone Mobile App Active',
     openBackendWebLabel: 'Backend Web',
     backToCustomerLabel: 'Back to Customer App',
-    profileTitle: 'ZoRun Mobile App & Account',
-    profileSubtitle: 'Switch your user workspace, install ZoRun on your phone home screen, and configure your Mizoram district.',
+    profileTitle: 'ZoRûn Mobile App & Account',
+    profileSubtitle: 'Switch your user workspace, install ZoRûn on your phone home screen, and configure your Mizoram district.',
     switchWorkspaceTitle: 'User App Workspace',
   },
   miz: {
-    brand: 'ZoRun',
-    backendBrand: 'ZoRun Backend',
+    brand: 'ZoRûn',
+    backendBrand: 'ZoRûn Backend',
     navCustomer: 'Customer',
     navPartner: 'Runner / Partner',
     navStaff: 'Awmpui Portal',
@@ -161,7 +161,7 @@ export const TRANSLATIONS: Record<
     installedStandaloneLabel: 'Mobile Standalone App a nung mek',
     openBackendWebLabel: 'Backend Web',
     backToCustomerLabel: 'Customer App-ah Let Rawh',
-    profileTitle: 'ZoRun Mobile App & Account',
+    profileTitle: 'ZoRûn Mobile App & Account',
     profileSubtitle: 'I hman duh mode thlang la, i phone home screen-ah Standalone App angin dah la, District Khawpui thlang rawh.',
     switchWorkspaceTitle: 'User App Hman Dan',
   },

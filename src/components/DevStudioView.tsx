@@ -53,7 +53,7 @@ export const DevStudioView: React.FC<DevStudioViewProps> = ({
   const [messages, setMessages] = useState<ArchitectMessage[]>([
     {
       role: 'assistant',
-      text: 'I am your embedded AI Software Engineer (gemini-4-hydrogen) with live tool-calling over ZoRun’s codebase, system_plugins, and app_remote_config. Ask me to update rates, toggle Sunday Emergency Mode, or author a new plugin.',
+      text: 'I am your embedded AI Software Engineer (gemini-4-hydrogen) with live tool-calling over ZoRûn’s codebase, system_plugins, and app_remote_config. Ask me to update rates, toggle Sunday Emergency Mode, or author a new plugin.',
     },
   ]);
 

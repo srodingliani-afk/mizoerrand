@@ -2,14 +2,20 @@ import React, { useCallback, useEffect, useState } from 'react';
 import {
   Activity,
   ArrowUpRight,
+  Clock,
   Database,
+  Flame,
+  HardDrive,
+  Map as MapIcon,
   Play,
   RefreshCw,
   Server,
+  ShieldCheck,
   Smartphone,
 } from 'lucide-react';
 import type { Language } from '../shared/types';
 import { triggerHaptic } from '../lib/nativeBridge';
+import { getGoogleDriveAccessToken } from '../lib/firebase';
 
 interface SystemStatusPayload {
   status: string;
@@ -18,6 +24,61 @@ interface SystemStatusPayload {
   connectedMobileClients: number;
   sundayEmergencyMode: boolean;
   configUpdatedAt: string;
+  firebase?: {
+    projectId: string;
+    appConfigured: boolean;
+    verificationMode: string;
+  };
+  database?: {
+    driver: 'local_json' | 'postgres_cloudsql';
+    target: string;
+    region: string;
+    connected: boolean;
+    fallbackActive: boolean;
+    latencyMs: number | null;
+    lastSavedAt: string | null;
+    pool?: {
+      totalCount: number;
+      idleCount: number;
+      waitingCount: number;
+    };
+    error?: string;
+  };
+  driveStorage?: {
+    provider: 'google_drive' | 'local_fallback';
+    configured: boolean;
+    tokenActive: boolean;
+    latencyMs: number | null;
+    folders: Array<{
+      id: string;
+      folderName: string;
+      privacy: 'public' | 'private';
+      maxSizeMb: number;
+      status: 'online' | 'missing' | 'unauthenticated' | 'error';
+      detail?: string;
+    }>;
+    error?: string;
+  };
+  ledgerIntegrity?: {
+    totalJournals: number;
+    balancedJournals: number;
+    unbalancedJournals: number;
+    totalDebitsRs: number;
+    totalCreditsRs: number;
+    isBalanced: boolean;
+  };
+  mapsPlatform?: {
+    routesMatrixReady: boolean;
+    geocodingReady: boolean;
+    hasApiKey: boolean;
+  };
+  cronWorker?: {
+    schedule: string;
+    lastRunAt: string | null;
+    runCount: number;
+    slaBreachesDetected: number;
+    staleBiddingJobs: number;
+  };
   counts: {
     partnersTotal: number;
     partnersOnline: number;
@@ -91,9 +152,15 @@ export const BackendConsoleView: React.FC<BackendConsoleViewProps> = ({
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch('/api/system/status', {
-        headers: { Authorization: `Bearer ${adminToken}` },
-      });
+      const headers: Record<string, string> = {
+        Authorization: `Bearer ${adminToken}`,
+      };
+      const driveToken = getGoogleDriveAccessToken();
+      if (driveToken) {
+        headers['X-Google-Access-Token'] = driveToken;
+      }
+
+      const res = await fetch('/api/system/status', { headers });
       if (res.status === 401) {
         onAuthExpired();
         return;
@@ -116,9 +183,14 @@ export const BackendConsoleView: React.FC<BackendConsoleViewProps> = ({
     setPingingPath(path);
     const start = performance.now();
     try {
-      const res = await fetch(path, {
-        headers: { Authorization: `Bearer ${adminToken}` },
-      });
+      const headers: Record<string, string> = {
+        Authorization: `Bearer ${adminToken}`,
+      };
+      const driveToken = getGoogleDriveAccessToken();
+      if (driveToken) {
+        headers['X-Google-Access-Token'] = driveToken;
+      }
+      const res = await fetch(path, { headers });
       if (res.status === 401) {
         onAuthExpired();
         return;
@@ -155,17 +227,15 @@ export const BackendConsoleView: React.FC<BackendConsoleViewProps> = ({
       <div className="rounded-2xl border border-slate-200 bg-white p-6 flex flex-wrap items-center justify-between gap-4">
         <div>
           <p className="text-xs font-medium text-teal-800">
-            Express Microservices · Mumbai ({statusData?.region || 'ap-south-1'}) · Port 3000
+            Express Microservices · Google Cloud ({statusData?.region || 'asia-south1'}) · Port 3000
           </p>
           <h1 className="text-2xl font-bold text-slate-900 mt-1">
-            {lang === 'miz'
-              ? 'Server Backend Web App & API Console'
-              : 'Server Backend Web App & API Console'}
+            Server Backend Web App &amp; API Console
           </h1>
           <p className="text-sm text-slate-600 mt-1 max-w-2xl">
             {lang === 'miz'
-              ? 'User Mobile Standalone App (/, /partner, /merchant) zawng zawng enkawltu Express REST API, Realtime SSE Stream leh persistent database console.'
-              : 'Dedicated web backend serving the ZoRun Mobile Standalone App (/, /partner, /merchant) over REST APIs and real-time Server-Sent Events.'}
+              ? 'User Mobile Standalone App (/, /partner, /merchant) zawng zawng enkawltu Express REST API, Firebase Auth, Double-Entry Ledger leh Google Drive telemetry.'
+              : 'Dedicated web backend serving ZoRûn Mobile App over REST & SSE, backed by Firebase Auth, Double-Entry Ledger, Google Drive, and Maps Routes v2.'}
           </p>
         </div>
 
@@ -213,7 +283,7 @@ export const BackendConsoleView: React.FC<BackendConsoleViewProps> = ({
           <p className="text-2xl font-bold font-mono tabular-nums text-slate-900 mt-1">
             {statusData ? formatUptime(statusData.uptimeSeconds) : '—'}
           </p>
-          <p className="text-xs text-slate-600 mt-1">Node + Express · Persistent Store</p>
+          <p className="text-xs text-slate-600 mt-1">Node + Express · {statusData?.region || 'asia-south1'}</p>
         </div>
 
         <div className="rounded-2xl border border-slate-200 bg-white p-5">
@@ -236,6 +306,146 @@ export const BackendConsoleView: React.FC<BackendConsoleViewProps> = ({
           </p>
         </div>
       </div>
+
+      {/* Live Firebase, Persistence & Ledger, Google Drive Folders, Maps & Cron Health */}
+      {statusData && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {/* Persistence & Double-Entry Ledger */}
+          {statusData.database && (
+            <div className="rounded-2xl border border-slate-200 bg-white p-5 space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                  <Database className="w-4 h-4 text-teal-700" />
+                  Persistence &amp; ACID Ledger ({statusData.database.region})
+                </h2>
+                <span
+                  className={`text-[11px] font-mono font-semibold px-2 py-0.5 rounded-md ${
+                    statusData.database.driver === 'postgres_cloudsql' && statusData.database.connected
+                      ? 'bg-emerald-100 text-emerald-900'
+                      : 'bg-teal-50 text-teal-900'
+                  }`}
+                >
+                  {statusData.database.driver === 'postgres_cloudsql' && statusData.database.connected
+                    ? `POSTGRES · ${statusData.database.latencyMs ?? 0}ms`
+                    : `LOCAL JSON · ${statusData.database.latencyMs ?? 0}ms`}
+                </span>
+              </div>
+              <p className="text-xs font-mono text-slate-600 break-all">
+                Store: {statusData.database.target}
+              </p>
+              {statusData.ledgerIntegrity && (
+                <div className="rounded-xl bg-slate-50 p-3 flex items-center justify-between gap-2 text-xs">
+                  <span className="inline-flex items-center gap-1.5 font-semibold text-slate-800">
+                    <ShieldCheck className="w-4 h-4 text-emerald-700" />
+                    Double-Entry Ledger ({statusData.ledgerIntegrity.balancedJournals}/{statusData.ledgerIntegrity.totalJournals} balanced)
+                  </span>
+                  <span className="font-mono font-bold text-emerald-800">
+                    ₹{statusData.ledgerIntegrity.totalDebitsRs.toLocaleString()} Dr = Cr
+                  </span>
+                </div>
+              )}
+              {statusData.database.pool && (
+                <p className="text-xs font-mono text-slate-500">
+                  Pool: total {statusData.database.pool.totalCount} · idle {statusData.database.pool.idleCount} · waiting {statusData.database.pool.waitingCount}
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Google Drive Storage Folders */}
+          {statusData.driveStorage && (
+            <div className="rounded-2xl border border-slate-200 bg-white p-5 space-y-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                  <HardDrive className="w-4 h-4 text-teal-700" />
+                  Google Drive Media Folders
+                </h2>
+                <span className="text-[11px] font-mono text-slate-600">
+                  {statusData.driveStorage.tokenActive
+                    ? `Drive API v3 · ${statusData.driveStorage.latencyMs ?? 0}ms`
+                    : 'Sign in w/ Google to activate Drive'}
+                </span>
+              </div>
+              <div className="space-y-1.5">
+                {statusData.driveStorage.folders.map((folder) => (
+                  <div
+                    key={folder.id}
+                    className="flex items-center justify-between gap-2 rounded-xl bg-slate-50 px-3 py-2 text-xs"
+                  >
+                    <div className="min-w-0">
+                      <span className="font-mono font-semibold text-slate-900">{folder.folderName}</span>
+                      <span className="text-[11px] text-slate-500 ml-2">
+                        {folder.privacy === 'private' ? 'Private (Admin 2FA)' : 'Shareable'} · ≤{folder.maxSizeMb}MB
+                      </span>
+                    </div>
+                    <span
+                      className={`text-[11px] font-mono font-semibold uppercase ${
+                        folder.status === 'online'
+                          ? 'text-emerald-700'
+                          : folder.status === 'unauthenticated'
+                            ? 'text-slate-500'
+                            : 'text-amber-700'
+                      }`}
+                    >
+                      {folder.status}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Firebase Auth & Firestore */}
+          {statusData.firebase && (
+            <div className="rounded-2xl border border-slate-200 bg-white p-5 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                  <Flame className="w-4 h-4 text-amber-600" />
+                  Firebase Auth &amp; Firestore RBAC
+                </h2>
+                <span className="text-[11px] font-mono font-semibold px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-900">
+                  {statusData.firebase.appConfigured ? 'ACTIVE' : 'CONFIG PENDING'}
+                </span>
+              </div>
+              <p className="text-xs font-mono text-slate-600">
+                Project: {statusData.firebase.projectId} · Verifier: {statusData.firebase.verificationMode}
+              </p>
+              <p className="text-xs text-slate-500">
+                District-scoped Firestore rules deployed for Runners, Orders &amp; 24×7 SOS alerts.
+              </p>
+            </div>
+          )}
+
+          {/* Google Maps Routes v2 + Cron SLA Worker */}
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 space-y-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                <MapIcon className="w-4 h-4 text-teal-700" />
+                Google Maps v2 &amp; SLA Worker
+              </h2>
+              <span className="text-[11px] font-mono font-semibold text-teal-800">
+                {statusData.mapsPlatform?.hasApiKey ? 'Routes & Geocoding LIVE' : 'Terrain Fallback Ready'}
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <div className="rounded-xl bg-slate-50 p-2.5">
+                <p className="text-[11px] text-slate-500">Routes Matrix &amp; Geocode</p>
+                <p className="font-semibold text-slate-900 mt-0.5">
+                  {statusData.mapsPlatform?.hasApiKey ? 'API v2 + v4 Key Loaded' : 'Haversine × 1.35'}
+                </p>
+              </div>
+              <div className="rounded-xl bg-slate-50 p-2.5">
+                <p className="text-[11px] text-slate-500 inline-flex items-center gap-1">
+                  <Clock className="w-3 h-3" /> Cron SLA ({statusData.cronWorker?.schedule || '* * * * *'})
+                </p>
+                <p className="font-mono font-semibold text-slate-900 mt-0.5">
+                  Runs: {statusData.cronWorker?.runCount ?? 0} · SOS SLA: {statusData.cronWorker?.slaBreachesDetected ?? 0}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Main Split: Express API Catalog + Live Response Inspector & Architecture Map */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">

@@ -3,6 +3,7 @@ import type {
   ErrandJobType,
   ErrandRequest,
   HygieneCategory,
+  KailawnStepTier,
   LatLng,
   PartnerCategory,
   PartnerProfile,
@@ -255,16 +256,35 @@ export function validateCheckBeforePayReturn(params: {
   };
 }
 
+export const KAILAWN_STEP_SURCHARGE_RS: Record<KailawnStepTier, number> = {
+  none: 0,
+  steps_0_15: 15,
+  steps_15_40: 35,
+  steps_40_plus: 65,
+};
+
+export function getKailawnSurcharge(
+  kailawnNeeded?: boolean,
+  stepTier?: KailawnStepTier
+): number {
+  if (!kailawnNeeded) return 0;
+  if (!stepTier || stepTier === 'none') return KAILAWN_STEP_SURCHARGE_RS.steps_0_15;
+  return KAILAWN_STEP_SURCHARGE_RS[stepTier] ?? 0;
+}
+
 export function calculateAllInclusiveFare(params: {
   category: PartnerCategory;
   distanceKm: number;
   stopsCount: number;
   needsWalkerHelper: boolean;
   microInsuranceOptIn: boolean;
+  kailawnNeeded?: boolean;
+  kailawnStepTier?: KailawnStepTier;
   config: AppRemoteConfig;
 }): {
   allInclusiveTotal: number;
   microInsuranceFee: number;
+  kailawnSurchargeRs: number;
   surgeMultiplier: number;
 } {
   const baseByCategory: Record<PartnerCategory, number> = {
@@ -286,6 +306,11 @@ export function calculateAllInclusiveFare(params: {
       params.config.rainSurgeMultiplier * params.config.trafficSurgeMultiplier * 100
     ) / 100;
 
+  const kailawnSurchargeRs = getKailawnSurcharge(
+    params.kailawnNeeded,
+    params.kailawnStepTier
+  );
+
   const rawTrip =
     (baseByCategory[params.category] +
       Math.max(0.5, params.distanceKm) * perKm[params.category] +
@@ -298,10 +323,11 @@ export function calculateAllInclusiveFare(params: {
     : 0;
 
   // Single all-inclusive price shown upfront; GST & platform commission are extracted internally
-  const allInclusiveTotal = Math.round(rawTrip + microInsuranceFee);
+  const allInclusiveTotal = Math.round(rawTrip + kailawnSurchargeRs + microInsuranceFee);
   return {
     allInclusiveTotal,
     microInsuranceFee,
+    kailawnSurchargeRs,
     surgeMultiplier,
   };
 }

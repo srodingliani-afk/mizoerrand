@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { db } from '../infrastructure/store';
 import { createSignedPrivateUrl, verifySignedPrivateToken } from '../infrastructure/signedUrls';
+import { createAdminKycSignedUrl, isValidKycObjectPath } from '../infrastructure/driveStorage';
 import { realtimeHub } from '../infrastructure/realtimeHub';
 import { requireAdminAuth } from '../infrastructure/adminAuth';
 import { validateOnboardingApplication } from '../domain/staffingRules';
@@ -39,6 +40,7 @@ authKycRouter.post('/apply', (req, res) => {
     skills?: string[];
     outstationAvailable?: boolean;
     liveInAvailable?: boolean;
+    kycDocumentPath?: string;
   };
 
   const validation = validateOnboardingApplication(body);
@@ -89,6 +91,10 @@ authKycRouter.post('/apply', (req, res) => {
     resumeSummary: body.resumeSummary!.trim().slice(0, 240),
     practicalTestScore: 88,
     documentSignedToken: 'pending-issue',
+    kycDocumentPath:
+      typeof body.kycDocumentPath === 'string' && isValidKycObjectPath(body.kycDocumentPath.trim())
+        ? body.kycDocumentPath.trim()
+        : undefined,
     status: 'pending',
   };
 
@@ -102,16 +108,32 @@ authKycRouter.post('/apply', (req, res) => {
   res.status(201).json({ item });
 });
 
-authKycRouter.get('/queue', requireAdminAuth, (_req, res) => {
+authKycRouter.get('/queue', requireAdminAuth, async (_req, res) => {
   const state = db.get();
-  const enriched = state.kycQueue.map((item) => {
-    const signed = createSignedPrivateUrl(item.id, 'kyc_doc', 60);
-    return {
-      ...item,
-      signedDocumentUrl: signed.url,
-      signedExpiresAt: signed.expiresAt,
-    };
-  });
+  const enriched = await Promise.all(
+    state.kycQueue.map(async (item) => {
+      if (item.kycDocumentPath) {
+        try {
+          const cloudSigned = await createAdminKycSignedUrl(item.kycDocumentPath, 60);
+          return {
+            ...item,
+            signedDocumentUrl: cloudSigned.signedUrl,
+            signedExpiresAt: cloudSigned.expiresAt,
+            signedStorageProvider: cloudSigned.provider,
+          };
+        } catch {
+          // Fall back to HMAC token if bucket probe fails
+        }
+      }
+      const signed = createSignedPrivateUrl(item.id, 'kyc_doc', 60);
+      return {
+        ...item,
+        signedDocumentUrl: signed.url,
+        signedExpiresAt: signed.expiresAt,
+        signedStorageProvider: 'local_fallback' as const,
+      };
+    })
+  );
   res.json({ kycQueue: enriched });
 });
 

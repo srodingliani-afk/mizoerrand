@@ -1,0 +1,259 @@
+========================================================================
+ZORUN — MIZORAM HYPERLOCAL MOBILITY & ESSENTIAL SERVICES OS
+APP DETAIL KIMCHANG (UPDATED FULL NOTEPAD / PLAIN TEXT DOCUMENT)
+========================================================================
+
+1. APP CHANCHIN TLANGPUI (OVERVIEW)
+------------------------------------------------------------------------
+App Hming        : ZoRun (Mizoram Super-App)
+Tawng (Language) : Bilingual — Mizo & English (1-Tap Toggle)
+Hmun Huam Chin   : Mizoram District Khawpui 11 zawng zawng
+                   (Aizawl, Lunglei, Champhai, Serchhip, Kolasib,
+                   Lawngtlai, Mamit, Siaha, Saitual, Khawzawl, Hnahthial)
+App Mode         : Progressive Web App (PWA) — Phone-ah install theih,
+                   Offline Cache (IndexedDB), Light & Dark Mode,
+                   Mobile-Responsive (390px+ zero text-clipping UI)
+Live URL (Dev)   : https://ais-dev-se2rthyt72uqkv2c7mvcri-658548579771.asia-southeast1.run.app
+Shared URL       : https://ais-pre-se2rthyt72uqkv2c7mvcri-658548579771.asia-southeast1.run.app
+
+
+2. CUSTOMER SUPER-APP FEATURES (/)
+------------------------------------------------------------------------
+A. Clean Navigation & Global District Synchronization
+   - Distraction-Free Customer Header:
+     * Customer header-ah Home, District Selector, Theme, Tawng toggle,
+       leh "Work with ZoRun" dropdown chauh dah a ni.
+     * Partner/Merchant/Staff portal link-te chu "Work with ZoRun"
+       dropdown leh Footer-ah felfai taka dah khawm a ni.
+     * /admin leh /backend chu customer UI atanga paih a ni a, direct
+       URL + 2FA PIN chauhvin luh theih a ni.
+   - Global District Sync (District 11):
+     * District i thlan (entirnan: Aizawl, Lunglei, Champhai, Lawngtlai)
+       azirin Saved Favourite Places, Active Trip Tracker, Quick Shops /
+       Marketplace listings, Search ranking, leh Sumo Counter defaults
+       zawng zawng a in-update rual vek.
+   - Universal Live Search:
+     * District active mek zawn hmasakna + Runner/Motor, En Hmasak Bazar,
+       Awmpui/Driver, leh 24x7 SOS chhungah zawn nghal a, tap 1-in hawnna
+     * Mobile screen te deuhah pawh hawrawp in-tan (truncation) awm lo.
+   - 1-Tap Saved Favourite Places:
+     * District tina hmun lar (In/Home, Office, Civil Hospital, Bazar)
+       auto-sync + Hmun thar dah belhna (+ Save Place).
+   - Live Active Trip Tracker (Mobile-Optimized):
+     * 4-step progress (Booked -> Accepted -> On the Way -> Arrived)
+     * Route hming, Status, Handover OTP, All-inclusive fare, leh
+       Kailawn surcharge chiang taka lan tirna (no "..." clipping)
+     * 1-Tap Share Live Trip (Chhungte hnena safety summary thawnna)
+     * Post-Job Star Rating (1-5 Stars) & Runner Tip (Rs. 0/10/20/50)
+
+B. Runner, Errands & Fleet Booking (Mizoram Hyperlocal Upgrades)
+   - 4 Service Tiers:
+     1) On-Foot Runner (Kailawn thui leh <1.5km exclusive walker)
+     2) 2-Wheeler Express (Damdawi, lehkha pawimawh, thil rang)
+     3) Local Auto / Taxi Cab (Rides & Hospital/Airport)
+     4) Pickup Truck Cargo (Bungraw lian, optional Runner Helper +Rs.120)
+   - Staircase / Slope ("Kailawn / Step Access Needed") Toggle:
+     * Step chhuk/chho tamna hmuna Runner-te tan effort surcharge felfai:
+       - 0 - 15 steps  : +Rs. 15
+       - 15 - 40 steps : +Rs. 35
+       - 40+ steps     : +Rs. 65
+     * Transparent fare breakdown-ah chiang takin a inziak lang nghal.
+   - Landmark-First Mizoram Addressing (Pickup & Drop):
+     * Veng / Locality
+     * YMA Section (e.g. Tlangnuam Section II)
+     * Nearest Landmark (Biak In / Tuikhur / Kawn)
+     * Optional GPS Pin button (1-tap live coordinates)
+   - 15-Second Voice Note Booking ("Hmet la Sawi Rawh"):
+     * Browser MediaRecorder API hmangin Mizo tawnga thuchah (max 15s)
+       hold emaw tap-a record theih (type ngai lo).
+     * Live countdown progress bar, audio playback preview, delete/re-record.
+     * Errand Booking leh Marketplace Product Checkout-ah hman theih ve ve.
+   - Voice-First Mizo Quick Presets:
+     * Gas cylinder lak | Damdawi lei | Bazar thil lak | Sumo counter dah
+   - Transparent Pricing & Safety:
+     * Man inthup awm lo (All-inclusive fare + Kailawn breakdown)
+     * Live Partner Bidding & Corridor Match
+     * 100% UPI Escrow emaw Dynamic QR COD
+     * Rs. 3 Transit & Accident Micro-Insurance Sachet
+     * Handover OTP & Before/After proof photo
+
+C. Inter-District Sumo / Maxicab Counter Parcel Bridge & Proxy Shopping
+   - Mode 1: Send Parcel (Thil Thawnna Pangngai — SUMO-MZ-xxxx)
+     * District 11 inkarah In atanga Runner lam -> Sumo Counter pek ->
+       District dang Sumo Counter / Home Drop (+Rs. 65).
+     * District active mek azirin Origin/Destination Counter auto-sync.
+     * Weight (0.5 - 50 kg) & Transparent Fare Breakdown.
+   - Mode 2: "Buy & Send via Sumo" (Proxy Shopping — BUY-MZ-xxxx)
+     * District pawn (e.g. Lawngtlai, Lunglei, Champhai, Siaha, etc.)
+       a awmte tan Aizawl Runner chhawra thil lei tir leh Sumo-a thawnna:
+       - Aizawl Market thlan theih:
+         1) Bara Bazar (Dawrpui)
+         2) Millennium Centre
+         3) Zarkawt Pharmacies
+         4) Chanmari Electronics
+         5) New Market Handloom
+       - Item Budget: Rs. 100 - Rs. 15,000
+       - Proxy Shopper Fee: Rs. 85 + 3% (maximum Rs. 250 cap)
+       - Transparent Escrow Breakdown:
+         Item Budget + Proxy Shopper Fee + Sumo Freight + Optional Home Drop
+       - Receipt Photo Upload: Runner/Customer-in dawr bill/receipt photo
+         upload theihna (booking laiin emaw order kal mekah).
+     * 4-step live status tracking.
+
+D. ZoRun Wallet, Referral Rewards & Plus Pass
+   - Live Wallet Balance & Loyalty Points
+   - Instant UPI Top-Up (+Rs. 100 / +Rs. 250 / +Rs. 500)
+   - Referral Code (ZORUN-MZ-2026) copy-na leh thian code hmangin
+     +Rs. 50 bonus & +100 Loyalty Points claim-na
+   - ZoRun Plus Pass (Rs. 99/month):
+     * Ruah sur surge awm lo
+     * Sumo parcel 12% discount
+     * Priority Runner matching
+   - Transaction Ledger kimchang
+
+E. En Hmasak Phawt Local Marketplace (/?tab=marketplace)
+   - Mizoram local dawrte leh thil chi hrang hrang (Active District auto-sync)
+   - 15-Second Voice Note Instruction ("Hmet la Sawi Rawh") checkout-ah
+     telh theih — Dawr Neitu chat-ah a lut nghal.
+   - En Hmasak Phawt (Check-Before-Pay) himna dan:
+     * Hygiene Exclusions: Innerwear, Opened Cosmetics, Perishable Food
+     * Merchant Safeguard: Return fee Rs. 45 & thla khatah vawi 3 return limit
+   - Order chhungah Customer <-> Dawr Neitu Live Chat
+
+F. Workforce, Awmpui & Family Driver Staffing (/?tab=workforce)
+   - Mode 2:
+     1) On-Demand Workforce (Darkar/Ni khat chhawr: Mistiri, Gardener, etc.)
+     2) Company-Managed Staffing (Thla tin package: Awmpui, Upa Enkawltu,
+        Chhungkaw Driver)
+   - Verified Trust Scorecard:
+     Police Verified · YMA/VC Endorsed · Practical Skill Score · Zero Hidden Fee
+   - Tripartite Agreement & Outstation/Live-In Welfare Safeguards:
+     (Riahna him, Ei leh in, Kal man tum sak mandatory check)
+   - Instant Replacement Guarantee (Awmpui chawlh/emergency-ah thlaktu)
+   - Worker Safety SOS button
+
+G. 24x7 Rapid Emergency SOS (/?tab=sos) — Category 12
+   1.  Plumber & Water Pipe Burst (Tui Pipe Siamtu)
+   2.  Electrician & Power Short-Circuit
+   3.  Roadside Mechanic & Towing
+   4.  Emergency Locksmith (Chabi Bo / Kawngkhar Hawn)
+   5.  Urgent Medical Cab
+   6.  Ambulance & Oxygen Support
+   7.  24x7 Night Pharmacy Run (Zan Damdawi Lei)
+   8.  LPG Gas Leak Technician (Gas Put Siamtu)
+   9.  Landslide & Drain Emergency (Leimin & Tui Luankawr)
+   10. Urgent Water Tanker (Tui Tanker)
+   11. Tyre Puncture & Emergency Fuel
+   12. Safe Women Night Escort
+   - 3-Shift Salaried Technicians (06-14, 14-22, 22-06) & 30s Dispatch SLA
+   - SOS 2-Tap Confirmation Guard (hmeh sual venna)
+
+H. User App Settings
+   - Light / Dark Mode Theme Switcher (Header Sun/Moon & Settings)
+   - Mizo / English Language & Active District Selector
+   - Default Payment Method & Auto Rs. 3 Micro-Insurance
+   - SOS 2-Tap Confirmation Guard
+   - Haptic Vibration Feedback (Test button nen)
+   - Normal / Large Text Readability
+   - Reduced Motion (Instant UI)
+   - Low-Data / Hill Signal Mode
+   - Offline Cache Clear & Live Sync
+
+
+3. DEDICATED ROLE PORTALS & URL ROUTES ("Work with ZoRun")
+------------------------------------------------------------------------
+1) Customer Super-App          : /
+   (Tabs: Home, Marketplace, Workforce, SOS, Me)
+2) Runner & Fleet Portal       : /partner
+   - Active job list, bidding, live GPS heartbeat, OTP handover,
+     Kailawn & Landmark details, voice note playback, wallet & COD cap
+3) Awmpui & Family Driver      : /staff
+   - Active household contract, Daily Check-In (Attendance),
+     Leave & Backup Request, Worker Safety SOS, Digital Payslip viewer
+4) Merchant Shop Portal        : /merchant
+   - AI Magic Listing, product stock management, En Hmasak orders & chat
+5) 24x7 SOS Technician Portal  : /technician
+   - 3-shift live SOS alert queue, en-route update, spare parts receipt,
+     ticket resolution
+6) Public Onboarding / Apply   : /apply
+   - 8-Role KYC Registration (Runner, Bike, Taxi, Pickup, Awmpui,
+     Family Driver, On-Demand Worker, SOS Tech) with Aadhaar masked,
+     Voter ID, DL/Commercial Permit, PVC & YMA/VC Reference ->
+     Admin KYC Queue-ah a lut nghal
+7) All Portals Directory       : /portals
+   - Role portal zawng zawng luhna felfai
+
+
+4. SERVER BACKEND WEB APP (SUPER ADMIN — DIRECT ROUTE + 2FA PIN ONLY)
+------------------------------------------------------------------------
+Security:
+- Customer header leh mobile profile atanga thup (direct URL access only)
+- Server-side PBKDF2 passcode + Super Admin 2FA PIN (160888 / env secret:
+  SUPER_ADMIN_2FA_PIN)
+
+1) Operations, HR & Staffing Console (/admin)
+   - KYC Vetting Queue: Approve/Reject (Approve rualin Partner/Workforce
+     directory-ah live-in a auto-publish nghal!)
+   - Awmpui & Driver HR Management:
+     * Add/Edit/Suspend staff profiles
+     * Active Contracts & Worker SOS live resolution
+     * Instant Replacement assign-na
+     * Leave Requests approve/reject & Attendance Logs
+     * Monthly Payroll Engine (1st-5th client billing, By 7th net salary
+       bank disbursement & digital payslip)
+   - Escrow & 18% GST Split Ledger
+   - Dispute Resolution & Prank Strike / Blacklist Safeguards
+
+2) Remote Config & SDUI Dev Studio (/admin/dev-studio)
+   - Zero-install feature toggles (Errands, Market, Workforce, Staffing, SOS)
+   - Mizoram Sunday Emergency Mode toggle
+   - Rain Surge & Traffic Surge multipliers, Base Rates, COD/Return caps
+   - Modular System Plugins toggle & live editor
+   - Config Snapshots & 1-Click Rollback
+
+3) Live Backend API Console (/backend)
+   - Live server health, uptime, active Storage Adapter info (Local JSON /
+     PostgreSQL), connected SSE mobile clients, database counts,
+     recent audit logs & microservice endpoint catalog
+
+
+5. TECHNICAL ARCHITECTURE, STORAGE ADAPTER & API MODULES
+------------------------------------------------------------------------
+Frontend : React 19 + TypeScript + Vite + Tailwind CSS v4 + Lucide Icons
+           + PWA Service Worker + IndexedDB Offline Cache + SSE Stream
+           + Browser MediaRecorder API (15s Voice Notes)
+Backend  : Node.js + Express (server.ts) + Gzip Compression + Live GPS
+           Cache + Realtime SSE Hub
+Database : Storage Abstraction Layer (server/infrastructure/dbAdapter.ts)
+           * Interface: StorageAdapter<TState>
+           * Dev Mode : LocalJsonStorageAdapter (atomic temp-file +
+                        fs.renameSync writes to .data/zorun-db.json)
+           * Prod Swap: PostgresStorageAdapter (Supabase / PostgreSQL
+                        ready via DATABASE_URL or SUPABASE_DB_URL with
+                        schema DDL & local write-through safety mirror)
+
+Microservice API Routes:
+  GET  /api/bootstrap                       - Single-roundtrip gzipped boot
+  GET  /api/realtime/stream                 - SSE live realtime push
+  *    /api/auth-kyc/*                      - Public /apply KYC & vetting
+  *    /api/errands/*                       - Fleet, fare + Kailawn calc,
+                                              landmarks, voice notes, OTP
+  *    /api/marketplace/*                   - Products, En Hmasak orders,
+                                              voice notes & shop chat
+  *    /api/staffing/*                      - Awmpui/Driver CRUD, leave,
+                                              attendance, payroll, SOS
+  *    /api/emergency/*                     - 12-category 24x7 SOS dispatch
+  *    /api/escrow/*                        - UPI escrow split, GST, disputes
+  *    /api/sdui/*                          - Remote Config & Sunday Mode
+  *    /api/dev-studio/*                    - Admin 2FA Auth, plugins, snapshots
+  *    /api/premium/*                       - Wallet top-up, Referral, Plus Pass,
+                                              Sumo Parcels, Buy & Send Proxy
+                                              Shopping, Receipt Photo Upload
+                                              (/sumo-parcels/:id/receipt),
+                                              Runner Ratings & Tips
+  GET  /api/system/status                   - Admin telemetry, storage adapter
+                                              status & recent audit logs
+
+========================================================================
+END OF DOCUMENT — ZORUN MIZORAM (UPDATED)
+========================================================================

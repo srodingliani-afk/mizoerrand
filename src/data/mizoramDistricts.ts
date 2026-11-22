@@ -449,3 +449,63 @@ export function findAnyMizoramVeng(vengName: string): DistrictVengPoint {
   }
   return MIZORAM_DISTRICTS[0].vengs[0];
 }
+
+export function calculateDistanceMeters(a: LatLng, b: LatLng): number {
+  const R = 6371000;
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const sinDLat = Math.sin(dLat / 2);
+  const sinDLng = Math.sin(dLng / 2);
+  const h =
+    sinDLat * sinDLat +
+    Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * sinDLng * sinDLng;
+  return Math.round(2 * R * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h)));
+}
+
+export interface NearestVengMatch {
+  veng: DistrictVengPoint;
+  distanceMeters: number;
+  isWithinMizoramBounds: boolean;
+}
+
+export function findNearestMizoramVeng(
+  lat: number,
+  lng: number,
+  preferredDistrict?: MizoramDistrict
+): NearestVengMatch {
+  let best: DistrictVengPoint = ALL_MIZORAM_VENGS[0];
+  let bestDist = Infinity;
+
+  for (const v of ALL_MIZORAM_VENGS) {
+    const d = calculateDistanceMeters({ lat, lng }, v);
+    if (d < bestDist) {
+      bestDist = d;
+      best = v;
+    }
+  }
+
+  // If the user is within Mizoram bounds (~45km of any mapped Veng) and preferredDistrict
+  // has a nearly identical match (within 250m), keep preferredDistrict for smooth UX.
+  if (preferredDistrict && best.district !== preferredDistrict) {
+    const localVengs = getVengsForDistrict(preferredDistrict);
+    for (const lv of localVengs) {
+      const ld = calculateDistanceMeters({ lat, lng }, lv);
+      if (ld <= bestDist + 250 && ld < 25000) {
+        best = lv;
+        bestDist = ld;
+        break;
+      }
+    }
+  }
+
+  const isWithinMizoramBounds =
+    lat >= 21.85 && lat <= 24.65 && lng >= 92.15 && lng <= 93.55 && bestDist <= 65000;
+
+  return {
+    veng: best,
+    distanceMeters: bestDist,
+    isWithinMizoramBounds,
+  };
+}
+

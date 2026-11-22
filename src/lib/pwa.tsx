@@ -106,7 +106,7 @@ const MobileInstallSheet: React.FC<InstallModalProps> = ({
       className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-950/50 backdrop-blur-xs p-0 sm:p-4"
       role="dialog"
       aria-modal="true"
-      aria-label="Install ZoRun Mobile App"
+      aria-label="Install ZoRûn Mobile App"
     >
       <div className="w-full sm:max-w-md rounded-t-3xl sm:rounded-2xl bg-white p-5 sm:p-6 shadow-xl space-y-4 pb-safe">
         <div className="w-10 h-1.5 bg-slate-200 rounded-full mx-auto sm:hidden" />
@@ -115,12 +115,12 @@ const MobileInstallSheet: React.FC<InstallModalProps> = ({
           <div className="flex items-center gap-3">
             <img
               src="/pwa-192x192.png"
-              alt="ZoRun App Icon"
+              alt="ZoRûn App Icon"
               className="w-12 h-12 rounded-2xl border border-slate-200 object-cover shrink-0"
             />
             <div>
               <h3 className="text-base font-bold text-slate-900">
-                {lang === 'miz' ? 'ZoRun Mobile Standalone App' : 'Install ZoRun Mobile App'}
+                {lang === 'miz' ? 'ZoRûn Mobile Standalone App' : 'Install ZoRûn Mobile App'}
               </h3>
               <p className="text-xs text-slate-600">
                 {lang === 'miz'
@@ -286,7 +286,7 @@ export const StandaloneInstallCard: React.FC<{ lang: Language }> = ({ lang }) =>
         <div className="flex items-center gap-3">
           <img
             src="/pwa-192x192.png"
-            alt="ZoRun Mobile App Icon"
+            alt="ZoRûn Mobile App Icon"
             className="w-12 h-12 rounded-2xl border border-slate-200 object-cover shrink-0"
           />
           <div>
@@ -302,7 +302,7 @@ export const StandaloneInstallCard: React.FC<{ lang: Language }> = ({ lang }) =>
             <p className="text-xs text-slate-600 mt-0.5">
               {isInstalled
                 ? lang === 'miz'
-                  ? 'Browser bar tel loin ZoRun app i hmang mek. Offline cache a inpeih.'
+                  ? 'Browser bar tel loin ZoRûn app i hmang mek. Offline cache a inpeih.'
                   : 'Running in full-screen standalone mode with offline IndexedDB sync.'
                 : lang === 'miz'
                   ? 'Browser bar awm lo, hawn rang, offline-ah pawh rate leh contact en theih.'
@@ -343,7 +343,7 @@ export const StandaloneInstallCard: React.FC<{ lang: Language }> = ({ lang }) =>
           {isInstallable
             ? lang === 'miz'
               ? 'Phone-ah Install Nghal Rawh'
-              : 'Install ZoRun Mobile App'
+              : 'Install ZoRûn Mobile App'
             : lang === 'miz'
               ? 'Phone-a Dah Dan En Rawh'
               : 'How to Install on Android / iOS'}

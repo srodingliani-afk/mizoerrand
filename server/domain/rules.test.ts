@@ -13,7 +13,7 @@ import type { AppRemoteConfig, ErrandRequest, PartnerProfile } from '../../src/s
 
 const baseConfig: AppRemoteConfig = {
   appName: 'ZoRun',
-  region: 'ap-south-1',
+  region: 'asia-south1',
   sundayEmergencyMode: false,
   rainSurgeMultiplier: 1.0,
   trafficSurgeMultiplier: 1.0,

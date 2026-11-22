@@ -203,10 +203,32 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
-  const handleVerifySignedUrl = async (signedUrl?: string) => {
-    if (!signedUrl) return;
+  const handleVerifySignedUrl = async (
+    item: KycQueueItem & { signedDocumentUrl?: string; signedExpiresAt?: string }
+  ) => {
     try {
-      const res = await fetch(signedUrl);
+      if (item.kycDocumentPath) {
+        const res = await fetch('/api/media/kyc/signed-url', {
+          method: 'POST',
+          headers: authHeaders(true),
+          body: JSON.stringify({ objectPath: item.kycDocumentPath, ttlSeconds: 60 }),
+        });
+        if (res.status === 401) {
+          onAuthExpired();
+          return;
+        }
+        const data = await res.json();
+        if (res.ok) {
+          setSignedCheckMsg(
+            `Admin 2FA 60s Signed URL issued (${data.bucket} · ${data.provider}) — Expires ${new Date(data.expiresAt).toLocaleTimeString()}`
+          );
+          return;
+        }
+        setSignedCheckMsg(data.error || 'Could not issue KYC signed URL.');
+        return;
+      }
+      if (!item.signedDocumentUrl) return;
+      const res = await fetch(item.signedDocumentUrl);
       const data = await res.json();
       if (res.ok) {
         setSignedCheckMsg(`Verified 60s Private URL for ${data.resourceId} (Expires ${new Date(data.expiresAt).toLocaleTimeString()})`);
@@ -328,7 +350,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         <div>
           <h1 className="text-xl font-bold text-slate-900">{t.adminTitle}</h1>
           <p className="text-xs text-slate-600 mt-0.5">
-            Mumbai (ap-south-1) · All 11 Mizoram District Capitals · Real-time Dispatch, KYC &amp; Shift Roster, Payroll, Escrow GST &amp; SDUI
+            Mumbai (asia-south1) · All 11 Mizoram District Capitals · Real-time Dispatch, KYC &amp; Shift Roster, Payroll, Escrow GST &amp; SDUI
           </p>
         </div>
 
@@ -582,7 +604,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <div className="flex flex-wrap items-center gap-2">
                       <button
                         type="button"
-                        onClick={() => handleVerifySignedUrl(item.signedDocumentUrl)}
+                        onClick={() => void handleVerifySignedUrl(item)}
                         className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-800 hover:bg-slate-50"
                       >
                         <FileCheck2 className="w-3.5 h-3.5 text-teal-700" /> View 60s Signed Docs

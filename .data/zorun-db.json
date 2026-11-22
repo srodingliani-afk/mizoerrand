@@ -1017,6 +1017,23 @@
   ],
   "staffingBookings": [
     {
+      "id": "stf-40046",
+      "workerId": "wrk-1",
+      "workerName": "Lalhmangaihi Khiangte",
+      "mode": "company_managed_staffing",
+      "customerName": "Pi Lalrinchhani",
+      "isOutstationOrLiveIn": true,
+      "accommodationProvided": true,
+      "foodProvided": true,
+      "travelCovered": true,
+      "allInclusiveAmount": 14500,
+      "contractId": "CTR-MZ-340046",
+      "tripartiteAgreement": true,
+      "workerSosActive": false,
+      "status": "active",
+      "createdAt": "2026-11-22T06:52:20.046Z"
+    },
+    {
       "id": "stf-101",
       "workerId": "wrk-1",
       "workerName": "Lalhmangaihi Khiangte",
@@ -1251,7 +1268,65 @@
       "createdAt": "2026-11-17T06:28:28.261Z"
     }
   ],
+  "customerWallet": {
+    "balanceRs": 320,
+    "loyaltyPoints": 240,
+    "referralCode": "ZORUN-MZ-2026",
+    "referralsClaimed": [],
+    "plusPassActive": false,
+    "transactions": [
+      {
+        "id": "wtx-seed-1",
+        "type": "topup",
+        "title": "Welcome UPI Wallet Credit",
+        "amountRs": 320,
+        "pointsDelta": 240,
+        "createdAt": "2026-11-22T06:51:40.811Z"
+      }
+    ]
+  },
+  "sumoParcels": [
+    {
+      "id": "sumo-seed-1",
+      "trackingCode": "SUMO-MZ-4821",
+      "senderName": "Malsawmkimi",
+      "receiverName": "Pi Lalhmingliani",
+      "receiverPhone": "+91 94361 55210",
+      "originDistrict": "Aizawl",
+      "originVeng": "Khatla",
+      "originCounter": "Zarkawt Sumo Counter",
+      "destinationDistrict": "Lunglei",
+      "destinationCounter": "Chanmari Lunglei Counter",
+      "parcelDescription": "Home-baked cakes & winter shawls (3 kg box)",
+      "weightKg": 3,
+      "includeHomeDrop": true,
+      "allInclusiveTotal": 280,
+      "status": "in_transit",
+      "createdAt": "2026-11-22T06:51:40.811Z"
+    }
+  ],
   "auditLogs": [
+    {
+      "id": "aud-1795331267960-yfpn",
+      "actor": "kyc-applicant",
+      "action": "MEDIA_UPLOADED",
+      "detail": "zorun-kyc-docs (0KB, local_fallback, private)",
+      "at": "2026-11-22T07:07:47.960Z"
+    },
+    {
+      "id": "aud-1795331267952-aq2y",
+      "actor": "media-upload",
+      "action": "MEDIA_UPLOADED",
+      "detail": "zorun-voice-notes (0KB, local_fallback)",
+      "at": "2026-11-22T07:07:47.952Z"
+    },
+    {
+      "id": "aud-1795330340046-k3fl",
+      "actor": "Pi Lalrinchhani",
+      "action": "STAFFING_BOOKED",
+      "detail": "Lalhmangaihi Khiangte (CTR-MZ-340046)",
+      "at": "2026-11-22T06:52:20.046Z"
+    },
     {
       "id": "aud-1795303272365-0i63",
       "actor": "Lalrinmawii Sailo",

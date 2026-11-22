@@ -12,6 +12,12 @@
     font-family: var(--font-sans);
     background-color: #f4f6f5;
     color: #0f172a;
+    transition: background-color 150ms ease, color 150ms ease;
+  }
+
+  html.dark body {
+    background-color: #020617;
+    color: #f1f5f9;
   }
 
   h1, h2, h3, h4, .font-display {

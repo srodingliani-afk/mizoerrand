@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
-import { CheckCircle2, ShieldCheck, UserPlus } from 'lucide-react';
+import { Camera, CheckCircle2, FileUp, ShieldCheck, UserPlus } from 'lucide-react';
 import type { Language, MizoramDistrict, PartnerCategory } from '../shared/types';
 import { ALL_MIZORAM_DISTRICT_NAMES, getDistrictInfo } from '../data/mizoramDistricts';
 import { triggerHaptic } from '../lib/nativeBridge';
+import { uploadMediaFile } from '../lib/mediaUpload';
+import { CameraCaptureModal } from './CameraCaptureModal';
 
 type RoleOption =
   | 'awmpui_managed'
@@ -137,9 +139,35 @@ export const OnboardingApplyView: React.FC<OnboardingApplyViewProps> = ({
   const [resumeSummary, setResumeSummary] = useState('');
   const [liveInAvailable, setLiveInAvailable] = useState(true);
   const [outstationAvailable, setOutstationAvailable] = useState(true);
+  const [kycDocumentPath, setKycDocumentPath] = useState<string>('');
+  const [kycDocLabel, setKycDocLabel] = useState<string>('');
+  const [uploadingKyc, setUploadingKyc] = useState(false);
+  const [kycCameraOpen, setKycCameraOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
   const [submittedRef, setSubmittedRef] = useState<{ id: string; name: string } | null>(null);
+
+  const handleKycDocUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadingKyc(true);
+    setErrors([]);
+    try {
+      const uploaded = await uploadMediaFile({
+        file,
+        filename: file.name,
+        category: 'kyc_doc',
+        district,
+      });
+      setKycDocumentPath(uploaded.objectPath);
+      setKycDocLabel(`${file.name} (${Math.max(1, Math.round(uploaded.sizeBytes / 1024))} KB · Private Vault)`);
+      triggerHaptic('success');
+    } catch (err) {
+      setErrors([err instanceof Error ? err.message : 'KYC document upload failed.']);
+    } finally {
+      setUploadingKyc(false);
+    }
+  };
 
   const selectedMeta = ROLE_OPTIONS.find((r) => r.id === roleOption) || ROLE_OPTIONS[0];
 
@@ -194,6 +222,7 @@ export const OnboardingApplyView: React.FC<OnboardingApplyViewProps> = ({
           .filter(Boolean),
         liveInAvailable,
         outstationAvailable,
+        kycDocumentPath: kycDocumentPath || undefined,
       };
 
       const res = await fetch('/api/auth-kyc/apply', {
@@ -253,7 +282,7 @@ export const OnboardingApplyView: React.FC<OnboardingApplyViewProps> = ({
               onClick={onBackHome}
               className="min-h-[44px] rounded-xl bg-emerald-800 px-5 text-xs font-bold text-white hover:bg-emerald-700"
             >
-              {lang === 'miz' ? 'Home-ah Kir Leh' : 'Back to ZoRun Home'}
+              {lang === 'miz' ? 'Home-ah Kir Leh' : 'Back to ZoRûn Home'}
             </button>
           </div>
         </div>
@@ -271,8 +300,8 @@ export const OnboardingApplyView: React.FC<OnboardingApplyViewProps> = ({
           <div>
             <h1 className="text-lg sm:text-xl font-bold">
               {lang === 'miz'
-                ? 'ZoRun Hnathawk / Driver / Awmpui Dilna'
-                : 'Join ZoRun — Awmpui, Driver & Runner KYC Registration'}
+                ? 'ZoRûn Hnathawk / Driver / Awmpui Dilna'
+                : 'Join ZoRûn — Awmpui, Driver & Runner KYC Registration'}
             </h1>
             <p className="text-xs text-emerald-100/90 mt-1 leading-relaxed">
               {lang === 'miz'
@@ -494,6 +523,40 @@ export const OnboardingApplyView: React.FC<OnboardingApplyViewProps> = ({
             />
           </div>
 
+          <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-3.5 flex flex-wrap items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-xs font-semibold text-slate-900">
+                {lang === 'miz'
+                  ? 'ID / PVC Document Upload (Private Vault · Admin 2FA Chauh)'
+                  : 'Upload ID / PVC Document (Private Bucket · Admin 2FA Only)'}
+              </p>
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                {kycDocLabel || 'JPG, PNG, WebP or PDF (max 5 MB) — encrypted inside zorun-kyc-docs'}
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => setKycCameraOpen(true)}
+                className="min-h-[40px] rounded-xl bg-emerald-800 px-3.5 py-2 text-xs font-semibold text-white hover:bg-emerald-900 inline-flex items-center gap-1.5"
+              >
+                <Camera className="w-3.5 h-3.5" />
+                <span>{lang === 'miz' ? 'Camera' : 'Take KYC Photo'}</span>
+              </button>
+              <label className="min-h-[40px] rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-xs font-semibold text-slate-800 hover:bg-slate-50 inline-flex items-center gap-1.5 cursor-pointer">
+                <FileUp className="w-3.5 h-3.5 text-emerald-700" />
+                <span>{uploadingKyc ? 'Uploading...' : kycDocumentPath ? 'Replace Doc' : 'Attach KYC Doc'}</span>
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp,application/pdf"
+                  capture="environment"
+                  onChange={(e) => void handleKycDocUpload(e)}
+                  className="hidden"
+                />
+              </label>
+            </div>
+          </div>
+
           {selectedMeta.targetCategory === 'staff' && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
@@ -583,6 +646,22 @@ export const OnboardingApplyView: React.FC<OnboardingApplyViewProps> = ({
               : 'Submit KYC Application'}
         </button>
       </form>
+
+      <CameraCaptureModal
+        open={kycCameraOpen}
+        onClose={() => setKycCameraOpen(false)}
+        lang={lang}
+        category="kyc_doc"
+        district={district}
+        titleEn="Capture ID / PVC Document (Camera)"
+        titleMiz="ID / PVC Document Thla La Rawh"
+        subtitleEn="Encrypted directly inside Admin-only Private KYC Vault"
+        subtitleMiz="Admin KYC Vault himah dah luh nghal a ni ang"
+        onCaptured={(result) => {
+          setKycDocumentPath(result.objectPath);
+          setKycDocLabel(`Camera Snapshot · Private Vault`);
+        }}
+      />
     </div>
   );
 };
