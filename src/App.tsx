@@ -1002,6 +1002,7 @@ export default function App() {
               lang={lang}
               selectedDistrict={selectedDistrict}
               sosTickets={sosTickets}
+              partners={partners}
               onRefresh={fetchAllState}
             />
           )}

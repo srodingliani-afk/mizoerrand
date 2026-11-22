@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { Camera, Send, Sparkles } from 'lucide-react';
+import { Camera, PackagePlus, Send, Sparkles, Truck } from 'lucide-react';
 import type { Language, MarketplaceOrder, MarketplaceProduct, MizoramDistrict } from '../shared/types';
 import { TRANSLATIONS } from '../i18n/translations';
 import { ALL_MIZORAM_DISTRICT_NAMES, getVengsForDistrict } from '../data/mizoramDistricts';
 import { compressImageToWebP } from '../lib/offlineCache';
+import { CameraCaptureModal } from './CameraCaptureModal';
 
 interface MerchantViewProps {
   lang: Language;
@@ -39,6 +40,24 @@ export const MerchantView: React.FC<MerchantViewProps> = ({
   const [loadingAi, setLoadingAi] = useState(false);
   const [aiResult, setAiResult] = useState<{ note?: string; error?: string } | null>(null);
   const [replyDrafts, setReplyDrafts] = useState<Record<string, string>>({});
+  const [productCameraOpen, setProductCameraOpen] = useState(false);
+
+  const handleRestockProduct = async (product: MarketplaceProduct, delta: number) => {
+    const nextStock = Math.max(0, (product.stock ?? 0) + delta);
+    try {
+      const res = await fetch(`/api/marketplace/products/${product.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stock: nextStock }),
+      });
+      if (res.ok) {
+        setAiResult({ note: `Updated stock for "${product.titleEn}" to ${nextStock} units.` });
+        await onRefresh();
+      }
+    } catch {
+      setAiResult({ error: 'Network error updating product stock.' });
+    }
+  };
 
   const handleImagePick = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -176,11 +195,21 @@ export const MerchantView: React.FC<MerchantViewProps> = ({
             </div>
           </div>
 
-          <label className="flex items-center justify-center gap-2 min-h-[44px] rounded-lg border border-dashed border-slate-300 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 cursor-pointer">
-            <Camera className="w-4 h-4 text-teal-700" />
-            {imageBase64 ? 'Product Photo Ready (WebP)' : 'Upload Product Photo (Optional)'}
-            <input type="file" accept="image/*" onChange={handleImagePick} className="hidden" />
-          </label>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => setProductCameraOpen(true)}
+              className="flex items-center justify-center gap-1.5 min-h-[44px] rounded-lg bg-teal-50 border border-teal-300 px-3 py-2 text-xs font-bold text-teal-900 hover:bg-teal-100"
+            >
+              <Camera className="w-4 h-4 text-teal-700" />
+              {imageBase64 ? 'Retake Camera Photo' : 'Live Camera Photo'}
+            </button>
+            <label className="flex items-center justify-center gap-1.5 min-h-[44px] rounded-lg border border-dashed border-slate-300 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 cursor-pointer">
+              <Camera className="w-4 h-4 text-teal-700" />
+              {imageBase64 ? 'Photo Ready (WebP)' : 'Upload File'}
+              <input type="file" accept="image/*" onChange={handleImagePick} className="hidden" />
+            </label>
+          </div>
 
           <div>
             <label htmlFor="m-voice" className="block text-xs font-medium text-slate-700 mb-1">
@@ -234,13 +263,26 @@ export const MerchantView: React.FC<MerchantViewProps> = ({
                     <div>
                       <p className="text-sm font-medium text-slate-900">{p.titleEn}</p>
                       <p className="text-xs text-slate-500">
-                        {p.titleMiz} · {p.veng} ({p.district || 'Aizawl'}) · {p.checkBeforePayEligible ? 'Check-Before-Pay' : `Hygiene Locked (${p.hygieneCategory})`}
+                        {p.titleMiz} · {p.veng} ({p.district || 'Aizawl'}) · {p.checkBeforePayEligible ? 'Check-Before-Pay' : `Hygiene Locked (${p.hygieneCategory})`} ·{' '}
+                        <strong className={p.stock <= 2 ? 'text-red-600' : 'text-teal-800'}>
+                          Stock: {p.stock}
+                        </strong>
                       </p>
                     </div>
                   </div>
-                  <span className="text-sm font-bold font-mono text-slate-900 shrink-0">
-                    Rs. {p.price}
-                  </span>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => void handleRestockProduct(p, 5)}
+                      title="Add +5 stock"
+                      className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-50"
+                    >
+                      <PackagePlus className="w-3 h-3 text-teal-700" /> +5 Stock
+                    </button>
+                    <span className="text-sm font-bold font-mono text-slate-900">
+                      Rs. {p.price}
+                    </span>
+                  </div>
                 </div>
               ))}
             </div>
@@ -248,16 +290,24 @@ export const MerchantView: React.FC<MerchantViewProps> = ({
 
           <div className="rounded-2xl border border-slate-200 bg-white p-5 space-y-3">
             <h2 className="text-base font-semibold text-slate-900">
-              Customer-to-Merchant In-App Messages ({orders.length})
+              Customer-to-Merchant In-App Messages &amp; Runner Dispatch ({orders.length})
             </h2>
             {orders.length === 0 ? (
               <p className="text-xs text-slate-500">No active customer orders yet.</p>
             ) : (
               orders.map((ord) => (
                 <div key={ord.id} className="rounded-xl bg-slate-50 p-3 space-y-2">
-                  <p className="text-xs font-semibold text-slate-900">
-                    {ord.id} · {ord.productTitle} · {ord.status.replace(/_/g, ' ')}
-                  </p>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-xs font-semibold text-slate-900">
+                      {ord.id} · {ord.productTitle} · {ord.status.replace(/_/g, ' ')}
+                    </p>
+                    <span className="inline-flex items-center gap-1 rounded-md bg-teal-100 px-2 py-0.5 text-[11px] font-bold text-teal-900">
+                      <Truck className="w-3 h-3" />
+                      {ord.assignedPartnerName
+                        ? `Runner: ${ord.assignedPartnerName} (₹${ord.deliveryFee})`
+                        : 'Assigning Runner'}
+                    </span>
+                  </div>
                   <div className="space-y-1">
                     {ord.chatMessages.map((m, idx) => (
                       <p key={idx} className="text-xs text-slate-700">
@@ -287,6 +337,20 @@ export const MerchantView: React.FC<MerchantViewProps> = ({
           </div>
         </div>
       </div>
+
+      <CameraCaptureModal
+        open={productCameraOpen}
+        onClose={() => setProductCameraOpen(false)}
+        lang={lang}
+        category="proof_photo"
+        district={merchantDistrict}
+        titleEn="Capture Studio Product Photo"
+        titleMiz="Zuar Tur Thlalak La Rawh"
+        onCaptured={(result) => {
+          setImageBase64(result.previewDataUrl);
+          setImageMimeType('image/webp');
+        }}
+      />
     </div>
   );
 };

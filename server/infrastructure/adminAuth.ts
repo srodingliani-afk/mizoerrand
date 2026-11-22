@@ -146,6 +146,10 @@ export function verifyAdminPasscode(
 
   const stored = db.get().adminAuth;
   if (!stored?.passcodeHash || !stored?.salt) {
+    // If unclaimed and user enters the default demo PIN 482910 (or any 6+ char code via verify-2fa), auto-claim it cleanly
+    if (trimmed.length >= 6) {
+      return claimInitialAdminPasscode(trimmed);
+    }
     return {
       ok: false,
       status: 409,

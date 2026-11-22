@@ -1416,6 +1416,10 @@ export const MobileProfileView: React.FC<MobileProfileViewProps> = ({
         onClose={() => setWorkspaceOpen(false)}
         lang={lang}
         selectedDistrict={selectedDistrict}
+        latestErrand={errands[0] || null}
+        latestOrder={orders[0] || null}
+        allErrands={errands}
+        allOrders={orders}
       />
     </div>
   );
