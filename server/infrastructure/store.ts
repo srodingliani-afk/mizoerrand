@@ -1126,6 +1126,10 @@ function createInitialState(): DatabaseState {
     videoApiSecret: process.env.VIDEO_INTERVIEW_API_SECRET?.trim() || '',
     roomPrefix: 'zorun-mizoram-hr',
     defaultRequireVideoForAwmpuiAndDrivers: true,
+    gpayMerchantVpa: 'zorun.mizoram@oksbi',
+    gpayMerchantName: 'ZoRûn Mizoram Escrow',
+    gpayBusinessPhone: '9862009900',
+    gpayEnabled: true,
     updatedAt: now,
   };
 

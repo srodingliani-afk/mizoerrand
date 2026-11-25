@@ -1752,13 +1752,70 @@ export const MasterSystemControlPanel: React.FC<MasterSystemControlPanelProps> =
             </div>
           </div>
 
+          <div className="rounded-2xl border border-blue-200 bg-blue-50/50 p-4 space-y-3">
+            <h3 className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
+              <Wallet className="w-4 h-4 text-blue-700" />
+              3. Mizoram Google Pay (GPay) Merchant VPA &amp; Dynamic QR Config
+            </h3>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Official GPay UPI ID (Merchant VPA)
+                </label>
+                <input
+                  type="text"
+                  value={integrationDraft.gpayMerchantVpa || 'zorun.mizoram@oksbi'}
+                  onChange={(e) =>
+                    setIntegrationDraft({
+                      ...integrationDraft,
+                      gpayMerchantVpa: e.target.value,
+                    })
+                  }
+                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-mono"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  GPay Business Phone Number
+                </label>
+                <input
+                  type="text"
+                  value={integrationDraft.gpayBusinessPhone || '9862009900'}
+                  onChange={(e) =>
+                    setIntegrationDraft({
+                      ...integrationDraft,
+                      gpayBusinessPhone: e.target.value,
+                    })
+                  }
+                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-mono"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  GPay Payee Display Name
+                </label>
+                <input
+                  type="text"
+                  value={integrationDraft.gpayMerchantName || 'ZoRûn Mizoram Escrow'}
+                  onChange={(e) =>
+                    setIntegrationDraft({
+                      ...integrationDraft,
+                      gpayMerchantName: e.target.value,
+                    })
+                  }
+                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold"
+                />
+              </div>
+            </div>
+          </div>
+
           <div className="flex justify-end">
             <button
               type="submit"
               className="inline-flex items-center gap-1.5 rounded-xl bg-teal-800 hover:bg-teal-900 px-5 py-2.5 text-xs font-bold text-white shadow-sm"
             >
               <Save className="w-4 h-4" />
-              Save AI KYC &amp; Live Video Interview Config
+              Save GPay, AI KYC &amp; Live Video Interview Config
             </button>
           </div>
         </form>

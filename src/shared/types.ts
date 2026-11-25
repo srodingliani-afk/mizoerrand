@@ -456,6 +456,10 @@ export interface SystemIntegrationConfig {
   videoApiSecret: string;
   roomPrefix: string;
   defaultRequireVideoForAwmpuiAndDrivers: boolean;
+  gpayMerchantVpa?: string;
+  gpayMerchantName?: string;
+  gpayBusinessPhone?: string;
+  gpayEnabled?: boolean;
   updatedAt: string;
 }
 

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -6,6 +6,7 @@ import {
   FileText,
   MapPin,
   MessageCircle,
+  QrCode,
   ShieldCheck,
 } from 'lucide-react';
 import type {
@@ -17,6 +18,7 @@ import type {
 } from '../shared/types';
 import { triggerHaptic } from '../lib/nativeBridge';
 import { LayerWindow } from './LayerWindow';
+import { GPayCheckoutModal } from './GPayCheckoutModal';
 
 interface CustomerDetailLayersProps {
   lang: Language;
@@ -65,6 +67,13 @@ export const CustomerDetailLayers: React.FC<CustomerDetailLayersProps> = ({
   selectedSosTicket,
   onCloseSosTicket,
 }) => {
+  const [gpayModalTarget, setGpayModalTarget] = useState<{
+    amountRs: number;
+    orderRef: string;
+    titleEn: string;
+    titleMiz: string;
+  } | null>(null);
+
   return (
     <>
       {/* =================================================================== */}
@@ -211,6 +220,23 @@ export const CustomerDetailLayers: React.FC<CustomerDetailLayersProps> = ({
                     ₹{selectedErrand.allInclusiveTotal}
                   </span>
                 </div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setGpayModalTarget({
+                      amountRs: selectedErrand.allInclusiveTotal,
+                      orderRef: selectedErrand.id,
+                      titleEn: `GPay Payment · ${selectedErrand.title}`,
+                      titleMiz: `GPay Pawisa Pekna · ${selectedErrand.title}`,
+                    })
+                  }
+                  className="w-full mt-2 min-h-[38px] rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-extrabold inline-flex items-center justify-center gap-1.5"
+                >
+                  <QrCode className="w-3.5 h-3.5" />
+                  {lang === 'miz'
+                    ? `GPay / QR-in Pe Rawh (₹${selectedErrand.allInclusiveTotal})`
+                    : `Pay with Google Pay (GPay · ₹${selectedErrand.allInclusiveTotal})`}
+                </button>
               </div>
             </div>
 
@@ -403,6 +429,23 @@ export const CustomerDetailLayers: React.FC<CustomerDetailLayersProps> = ({
                   ₹{selectedOrder.allInclusiveTotal}
                 </span>
               </div>
+              <button
+                type="button"
+                onClick={() =>
+                  setGpayModalTarget({
+                    amountRs: selectedOrder.allInclusiveTotal,
+                    orderRef: selectedOrder.id,
+                    titleEn: `GPay Payment · ${selectedOrder.productTitle}`,
+                    titleMiz: `GPay Pawisa Pekna · ${selectedOrder.productTitle}`,
+                  })
+                }
+                className="w-full mt-2 min-h-[38px] rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-extrabold inline-flex items-center justify-center gap-1.5"
+              >
+                <QrCode className="w-3.5 h-3.5" />
+                {lang === 'miz'
+                  ? `GPay / QR-in Pe Rawh (₹${selectedOrder.allInclusiveTotal})`
+                  : `Pay with Google Pay (GPay · ₹${selectedOrder.allInclusiveTotal})`}
+              </button>
             </div>
 
             <div className="rounded-2xl bg-emerald-50/70 p-4 space-y-1.5 text-emerald-950">
@@ -632,6 +675,16 @@ export const CustomerDetailLayers: React.FC<CustomerDetailLayersProps> = ({
           </div>
         )}
       </LayerWindow>
+
+      <GPayCheckoutModal
+        open={Boolean(gpayModalTarget)}
+        onClose={() => setGpayModalTarget(null)}
+        lang={lang}
+        amountRs={gpayModalTarget?.amountRs || 100}
+        orderRef={gpayModalTarget?.orderRef || 'GPAY'}
+        titleEn={gpayModalTarget?.titleEn || 'GPay Payment'}
+        titleMiz={gpayModalTarget?.titleMiz || 'GPay Pawisa Pekna'}
+      />
     </>
   );
 };

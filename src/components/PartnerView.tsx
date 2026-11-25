@@ -22,6 +22,7 @@ import { publishRunnerLocationToFirestore } from '../lib/firestoreSync';
 import { startLiveGpsWatch, type LiveGpsFix, type LiveLocationWatcher } from '../lib/geolocation';
 import { CameraCaptureModal, type CameraCaptureResult } from './CameraCaptureModal';
 import { LiveVideoInterviewModal } from './LiveVideoInterviewModal';
+import { GPayCheckoutModal } from './GPayCheckoutModal';
 
 interface PartnerViewProps {
   lang: Language;
@@ -58,6 +59,13 @@ export const PartnerView: React.FC<PartnerViewProps> = ({
   const [partnerKycDocPath, setPartnerKycDocPath] = useState<string>('');
   const [queuedPartnerKycItem, setQueuedPartnerKycItem] = useState<KycQueueItem | null>(null);
   const [partnerVideoModalOpen, setPartnerVideoModalOpen] = useState(false);
+  const [gpayModalTarget, setGpayModalTarget] = useState<{
+    amountRs: number;
+    orderRef: string;
+    titleEn: string;
+    titleMiz: string;
+    mode: 'customer_qr' | 'cod_deposit';
+  } | null>(null);
   const gpsWatcherRef = useRef<LiveLocationWatcher | null>(null);
   const [proofCameraTarget, setProofCameraTarget] = useState<{
     jobId: string;
@@ -666,10 +674,22 @@ export const PartnerView: React.FC<PartnerViewProps> = ({
               </p>
               <button
                 type="button"
-                onClick={handleDepositCod}
+                onClick={() => {
+                  if (activePartner.codCashHeld > 0) {
+                    setGpayModalTarget({
+                      amountRs: activePartner.codCashHeld,
+                      orderRef: `COD-${activePartner.id}`,
+                      titleEn: `Deposit Held COD Cash via GPay (${activePartner.name})`,
+                      titleMiz: `GPay-in COD Pawisa Chhung Lut Rawh (${activePartner.name})`,
+                      mode: 'cod_deposit',
+                    });
+                  } else {
+                    void handleDepositCod();
+                  }
+                }}
                 className="mt-1 text-xs font-semibold text-teal-700 hover:underline"
               >
-                Deposit COD via UPI
+                Deposit COD via GPay / UPI
               </button>
             </div>
 
@@ -867,6 +887,21 @@ export const PartnerView: React.FC<PartnerViewProps> = ({
                     >
                       <CheckCircle2 className="w-4 h-4" /> Verify OTP &amp; Release Escrow
                     </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setGpayModalTarget({
+                          amountRs: job.allInclusiveTotal,
+                          orderRef: job.id,
+                          titleEn: `Customer Doorstep GPay QR · ${job.id}`,
+                          titleMiz: `Customer GPay Scan Tur QR · ${job.id}`,
+                          mode: 'customer_qr',
+                        })
+                      }
+                      className="min-h-[40px] inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3.5 py-2 text-xs font-bold text-white hover:bg-blue-700"
+                    >
+                      Show Customer GPay QR (₹{job.allInclusiveTotal})
+                    </button>
                   </div>
                 </div>
               )}
@@ -918,6 +953,28 @@ export const PartnerView: React.FC<PartnerViewProps> = ({
         lang={lang}
         kycItem={queuedPartnerKycItem}
         isServerStaff={false}
+      />
+
+      <GPayCheckoutModal
+        open={Boolean(gpayModalTarget)}
+        onClose={() => setGpayModalTarget(null)}
+        lang={lang}
+        amountRs={gpayModalTarget?.amountRs || 100}
+        orderRef={gpayModalTarget?.orderRef || 'GPAY'}
+        titleEn={gpayModalTarget?.titleEn || 'GPay Payment'}
+        titleMiz={gpayModalTarget?.titleMiz || 'GPay Pawisa Pekna'}
+        onPaymentConfirmed={
+          gpayModalTarget?.mode === 'cod_deposit'
+            ? async () => {
+                await handleDepositCod();
+              }
+            : async (utr) => {
+                setFeedback({
+                  type: 'ok',
+                  msg: `Customer GPay payment verified (UTR: ${utr}). Enter 4-digit OTP to complete handover.`,
+                });
+              }
+        }
       />
     </div>
   );

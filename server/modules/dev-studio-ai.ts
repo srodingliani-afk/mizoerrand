@@ -324,6 +324,16 @@ devStudioAiRouter.put('/integrations', requireAdminAuth, (req, res) => {
     ...(typeof patch.defaultRequireVideoForAwmpuiAndDrivers === 'boolean'
       ? { defaultRequireVideoForAwmpuiAndDrivers: patch.defaultRequireVideoForAwmpuiAndDrivers }
       : {}),
+    ...(typeof patch.gpayMerchantVpa === 'string' && patch.gpayMerchantVpa.trim()
+      ? { gpayMerchantVpa: patch.gpayMerchantVpa.trim() }
+      : {}),
+    ...(typeof patch.gpayMerchantName === 'string' && patch.gpayMerchantName.trim()
+      ? { gpayMerchantName: patch.gpayMerchantName.trim() }
+      : {}),
+    ...(typeof patch.gpayBusinessPhone === 'string' && patch.gpayBusinessPhone.trim()
+      ? { gpayBusinessPhone: patch.gpayBusinessPhone.trim() }
+      : {}),
+    ...(typeof patch.gpayEnabled === 'boolean' ? { gpayEnabled: patch.gpayEnabled } : {}),
     updatedAt: new Date().toISOString(),
   };
 

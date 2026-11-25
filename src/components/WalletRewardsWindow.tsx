@@ -13,6 +13,7 @@ import {
 import type { CustomerWalletState, Language } from '../shared/types';
 import { triggerHaptic } from '../lib/nativeBridge';
 import { LayerWindow } from './LayerWindow';
+import { GPayCheckoutModal } from './GPayCheckoutModal';
 
 interface WalletRewardsWindowProps {
   open: boolean;
@@ -35,6 +36,7 @@ export const WalletRewardsWindow: React.FC<WalletRewardsWindowProps> = ({
   const [referralInput, setReferralInput] = useState('');
   const [copied, setCopied] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null);
+  const [gpayTopupAmount, setGpayTopupAmount] = useState<number | null>(null);
 
   const handleTopup = async (amountRs: number) => {
     setBusyAction(`topup-${amountRs}`);
@@ -184,10 +186,13 @@ export const WalletRewardsWindow: React.FC<WalletRewardsWindowProps> = ({
                 key={amt}
                 type="button"
                 disabled={busyAction !== null}
-                onClick={() => void handleTopup(amt)}
+                onClick={() => {
+                  triggerHaptic('light');
+                  setGpayTopupAmount(amt);
+                }}
                 className="min-h-[42px] rounded-xl bg-white/15 hover:bg-white/25 active:scale-[0.97] text-xs font-bold text-white transition-all inline-flex items-center justify-center gap-1 font-mono tabular-nums disabled:opacity-50"
               >
-                <Plus className="w-3.5 h-3.5" />₹{amt}
+                <Plus className="w-3.5 h-3.5" />GPay ₹{amt}
               </button>
             ))}
           </div>
@@ -345,6 +350,21 @@ export const WalletRewardsWindow: React.FC<WalletRewardsWindowProps> = ({
           </div>
         </section>
       </div>
+
+      <GPayCheckoutModal
+        open={gpayTopupAmount !== null}
+        onClose={() => setGpayTopupAmount(null)}
+        lang={lang}
+        amountRs={gpayTopupAmount || 250}
+        orderRef={`WALLET-${Date.now().toString().slice(-5)}`}
+        titleEn={`ZoRûn Wallet Top-Up (₹${gpayTopupAmount || 250})`}
+        titleMiz={`GPay-in ZoRûn Wallet Top-Up (₹${gpayTopupAmount || 250})`}
+        onPaymentConfirmed={async () => {
+          if (gpayTopupAmount) {
+            await handleTopup(gpayTopupAmount);
+          }
+        }}
+      />
     </LayerWindow>
   );
 };
